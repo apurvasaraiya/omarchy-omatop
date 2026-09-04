@@ -23,12 +23,16 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
   one resource, RAM, CPU, GPU, DISK, NET, filled from the bottom by app,
   every app in its own colour, with the machine's figure captioned below.
   Read together they are a skyline: the tallest fill is the pressure and
-  the colours say who, before any number. The same colour marks the app's
-  row. Hover a row or a segment and the gauges dim to that one app. Every
-  number in the list sits over a hairline scaled to the column's largest
-  value, so a column reads as a chart. Nothing is blank: a quiet 0 is a
-  real zero, and DISK carries its unit. SOCKETS is the network column's
-  honest name.
+  the colours say who, before any number. Each gauge holds one segment per
+  row on screen; everything below the fold folds into one quiet block. The
+  same colour marks the app's row. Hover a row or a segment and the gauges
+  dim to that one app, ribbons in its colour join its segment across the
+  strip, and every caption turns into that app's own figure. The RAM
+  caption also carries a trend word from the last half hour, "climbing",
+  "steady" or "falling". Every number in the list sits over a hairline
+  scaled to the column's largest value, so a column reads as a chart.
+  Nothing is blank: a quiet 0 is a real zero, and DISK carries its unit.
+  SOCKETS is the network column's honest name.
 - **Omarchy web apps** are Chromium windows, but they live on the desktop
   as apps, so they are listed as apps: their own row, their own colour,
   the app's icon with a small Chromium badge, and the Chromium row holds
@@ -115,6 +119,14 @@ Settings, in the widget's entry in `~/.config/omarchy/shell.json`:
 - `maxApps` (default 10): how many apps the panel lists.
 - `card` is set to `false` on install, so the widget sits in the bar without
   the per-widget card outline of the V7 bar clone.
+
+## IPC
+
+- `omarchy-shell apurva.omatop toggle` (also `open`, `close`)
+- `omarchy-shell apurva.omatop browser`: open straight into the browser's pages
+- `omarchy-shell apurva.omatop quit app:<pid>`: open on that row with the
+  quit confirmation up, which is also how the quit flow is tested
+- `omarchy-shell apurva.omatop state`: cursor, sort and query as JSON
 
 ## Files
 

@@ -43,10 +43,18 @@ Panel {
   readonly property int visibleRows: Math.max(4, Number(setting("visibleRows", 11)) || 11)
   readonly property var rows: limitRows(Model.arrangeRows(Model.buildRows(snapshot, focusKey, 1000), sortKey, query))
   readonly property var rowMap: Model.rowMap(rows)
-  readonly property var memSegments: Model.tankSegments(snapshot, rows, "mem")
-  readonly property var cpuSegments: Model.tankSegments(snapshot, rows, "cpu")
-  readonly property var gpuSegments: Model.tankSegments(snapshot, rows, "gpu")
-  readonly property var diskSegments: Model.tankSegments(snapshot, rows, "disk")
+  readonly property var history: hostWidget && hostWidget.history ? hostWidget.history : []
+  readonly property var memSegments: Model.tankSegments(snapshot, rows, "mem", visibleRows)
+  readonly property var cpuSegments: Model.tankSegments(snapshot, rows, "cpu", visibleRows)
+  readonly property var gpuSegments: Model.tankSegments(snapshot, rows, "gpu", visibleRows)
+  readonly property var diskSegments: Model.tankSegments(snapshot, rows, "disk", visibleRows)
+
+  // What a gauge says underneath: the machine's figure, or, with a row
+  // under the cursor, that app's figure in the same unit.
+  function gaugeCaption(which) {
+    if (root.hoverRow && root.hoverRow.type !== "note" && root.hoverRow.type !== "header") return Model.rowFigure(root.hoverRow, which)
+    return Model.railCaption(root.snapshot, which, root.rows, which === "mem" ? root.history : undefined)
+  }
   readonly property var colMax: ({
     cpu: Model.columnMax(rows, "cpu"), mem: Model.columnMax(rows, "mem"), gpu: Model.columnMax(rows, "gpu"),
     disk: Model.columnMax(rows, "disk"), net: Model.columnMax(rows, "net")
@@ -248,6 +256,14 @@ Panel {
     root.focusKey = ""
     searchField.text = ""
     Qt.callLater(function() { if (back !== "") setCursorKey(back) })
+  }
+
+  // For the IPC: land on a row by key and ask to close it, so the whole
+  // quit flow can be driven (and tested) without a pointer.
+  function requestCloseKey(key) {
+    if (!root.opened) root.open()
+    setCursorKey(key)
+    requestClose(root.rowMap[key] || null)
   }
 
   // Straight into the browser's pages, for a keybind or the IPC.
@@ -505,6 +521,15 @@ Panel {
       return ""
     }
 
+    // Top and bottom of a segment in this item's coordinates, or null.
+    function segmentSpan(key) {
+      var s = gaugeItem.shownMap[key]
+      if (!s) return null
+      var top = 1 + gaugeItem.innerHeight * (1 - s.start - s.frac)
+      return { top: top, bottom: top + gaugeItem.innerHeight * s.frac }
+    }
+    readonly property real tubeLeft: (width - tubeWidth) / 2
+
     Connections {
       target: root
       function onCursorKeyChanged() { canvas.requestPaint() }
@@ -653,15 +678,81 @@ Panel {
         }
 
         // ---------- Gauges: five columns standing together ----------
+        Item {
+          width: parent.width
+          implicitHeight: gauges.implicitHeight
+
+          // The ribbons: with a row under the cursor, its segment in each
+          // gauge is joined to the same segment in the next, in the row's
+          // colour, so one app reads across the strip as one shape. They
+          // exist only while hovering; the strip stays quiet otherwise.
+          Item {
+            id: ribbons
+            anchors.fill: parent
+            readonly property bool active: root.cursorKey !== "" && root.cursor >= 0
+            opacity: active ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: 180 } }
+
+            Connections { target: root; function onCursorKeyChanged() { ribbonCanvas.requestPaint() } }
+            Timer {
+              // Gauges morph for 800 ms after a sample; keep the ribbons on them.
+              interval: 40
+              running: ribbons.active
+              repeat: true
+              onTriggered: ribbonCanvas.requestPaint()
+            }
+
+            Canvas {
+              id: ribbonCanvas
+              anchors.fill: parent
+
+              function ribbon(ctx, col, x1, t1, b1, x2, t2, b2) {
+                var cx = (x1 + x2) / 2
+                ctx.beginPath()
+                ctx.moveTo(x1, t1)
+                ctx.bezierCurveTo(cx, t1, cx, t2, x2, t2)
+                ctx.lineTo(x2, b2)
+                ctx.bezierCurveTo(cx, b2, cx, b1, x1, b1)
+                ctx.closePath()
+                ctx.fillStyle = Qt.alpha(col, 0.16)
+                ctx.fill()
+                ctx.strokeStyle = Qt.alpha(col, 0.7)
+                ctx.lineWidth = 1
+                ctx.beginPath(); ctx.moveTo(x1, t1); ctx.bezierCurveTo(cx, t1, cx, t2, x2, t2); ctx.stroke()
+                ctx.beginPath(); ctx.moveTo(x1, b1); ctx.bezierCurveTo(cx, b1, cx, b2, x2, b2); ctx.stroke()
+              }
+
+              onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+                if (!ribbons.active) return
+                var key = root.cursorKey
+                var col = Model.colorFor(key)
+                var chain = [memGauge, cpuGauge, gpuGauge, diskGauge]
+                var prev = null
+                for (var i = 0; i < chain.length; i++) {
+                  var g = chain[i]
+                  var span = g.segmentSpan(key)
+                  var pos = g.mapToItem(ribbons, g.tubeLeft, 0)
+                  var bottom = pos.y + g.tubeHeight
+                  var cur = span ? { left: pos.x, right: pos.x + g.tubeWidth, top: pos.y + span.top, bottom: pos.y + span.bottom }
+                                 : { left: pos.x, right: pos.x + g.tubeWidth, top: bottom, bottom: bottom }
+                  if (prev) ribbon(ctx, col, prev.right, prev.top, prev.bottom, cur.left, cur.top, cur.bottom)
+                  prev = cur
+                }
+              }
+            }
+          }
+
         Row {
           id: gauges
           width: parent.width
           readonly property int cell: Math.floor(width / 5)
 
-          Gauge { width: gauges.cell; target: root.memSegments; label: "RAM"; caption: Model.railCaption(root.snapshot, "mem", root.rows) }
-          Gauge { width: gauges.cell; target: root.cpuSegments; label: "CPU"; caption: Model.railCaption(root.snapshot, "cpu", root.rows) }
-          Gauge { width: gauges.cell; target: root.gpuSegments; label: "GPU"; caption: Model.railCaption(root.snapshot, "gpu", root.rows) }
-          Gauge { width: gauges.cell; target: root.diskSegments; label: "DISK"; caption: Model.railCaption(root.snapshot, "disk", root.rows) }
+          Gauge { id: memGauge; width: gauges.cell; target: root.memSegments; label: "RAM"; caption: root.gaugeCaption("mem") }
+          Gauge { id: cpuGauge; width: gauges.cell; target: root.cpuSegments; label: "CPU"; caption: root.gaugeCaption("cpu") }
+          Gauge { id: gpuGauge; width: gauges.cell; target: root.gpuSegments; label: "GPU"; caption: root.gaugeCaption("gpu") }
+          Gauge { id: diskGauge; width: gauges.cell; target: root.diskSegments; label: "DISK"; caption: root.gaugeCaption("disk") }
 
           // The network gauge is the machine's, not split by app: the kernel
           // does not say which process a byte belonged to. Two columns in
@@ -739,7 +830,7 @@ Panel {
               anchors.topMargin: Style.space(2)
               anchors.horizontalCenter: parent.horizontalCenter
               textFormat: Text.PlainText
-              text: Model.railCaption(root.snapshot, "net")
+              text: root.gaugeCaption("net")
               color: root.dim
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.caption
@@ -748,6 +839,8 @@ Panel {
               elide: Text.ElideRight
             }
           }
+        }
+
         }
 
         // ---------- Column titles: click one to sort by it ----------

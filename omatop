@@ -673,8 +673,15 @@ class FaviconStore:
                 data = (small[0] if small else rows[-1])[0]
                 if not data:
                     continue
-                with open(out, "wb") as f:
-                    f.write(data)
+                # Exclusive temp under an unguessable name, then rename: the
+                # final path is only ever a rename target, never opened.
+                tmp = "%s.%d.%s.tmp" % (out, os.getpid(), base64.b32encode(os.urandom(5)).decode().lower())
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+                try:
+                    os.write(fd, data)
+                finally:
+                    os.close(fd)
+                os.replace(tmp, out)
                 return out
         finally:
             conn.close()
@@ -724,6 +731,10 @@ class Sampler:
         self.prev_net = None # (rx, tx, monotonic time)
         self.prev_io = {}    # pid -> (bytes, monotonic time)
         self.prev_disk = None
+        self.tick = 0
+        self.gpu_pct = {}
+        self.gpu_mem = {}
+        self.sockets = {}
         self.webapps = omarchy_webapps()
         self.webapps_read = time.monotonic()
 
@@ -779,9 +790,13 @@ class Sampler:
 
         # GPU time, GPU memory and sockets for the processes that matter:
         # the fd walk is the costly part, so it stops at the sixty heaviest.
-        gpu_pct = {}
-        gpu_mem = {}
-        sockets = {}
+        # The fd walk is the costly part of a sample, so it runs every other
+        # tick and the tick between reuses its numbers.
+        self.tick += 1
+        walk = self.tick % 2 == 1
+        gpu_pct = dict(self.gpu_pct)
+        gpu_mem = dict(self.gpu_mem)
+        sockets = dict(self.sockets)
         disk_rate = {}
         for pid in sorted(procs, key=lambda x: procs[x]["rss"], reverse=True)[:60]:
             b = io_bytes(pid)
@@ -790,6 +805,8 @@ class Sampler:
                 if prev is not None and now > prev[1]:
                     disk_rate[pid] = max(0, (b - prev[0]) / (now - prev[1]))
                 self.prev_io[pid] = (b, now)
+            if not walk:
+                continue
             st = fd_stats(pid)
             if st is None:
                 continue
@@ -807,6 +824,10 @@ class Sampler:
         for pid in list(self.prev_io):
             if pid not in procs:
                 del self.prev_io[pid]
+        for d in (gpu_pct, gpu_mem, sockets):
+            for pid in list(d):
+                if pid not in procs:
+                    del d[pid]
         self.gpu_pct = gpu_pct
         self.gpu_mem = gpu_mem
         self.sockets = sockets

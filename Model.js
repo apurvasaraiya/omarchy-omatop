@@ -95,62 +95,8 @@ function topApp(snapshot) {
   return snapshot && snapshot.apps && snapshot.apps.length > 0 ? snapshot.apps[0] : null
 }
 
-function topSite(app) {
-  if (!app || !app.sites) return null
-  for (var i = 0; i < app.sites.length; i++) {
-    if (app.sites[i].kind === "site") return app.sites[i]
-  }
-  return null
-}
-
 function siteLabel(site) {
   return site.omarchy ? site.app : site.name
-}
-
-// The biggest thing that can actually be closed: a page if the top app is a
-// browser with sites resolved, else the heaviest unprotected app.
-function bestRelease(snapshot) {
-  if (!snapshot || !snapshot.apps) return null
-  for (var i = 0; i < snapshot.apps.length; i++) {
-    var app = snapshot.apps[i]
-    if (app.protected) continue
-    var site = topSite(app)
-    if (app.browser && site && site.closable) return { name: siteLabel(site), mem: site.mem }
-    return { name: app.name, mem: app.mem }
-  }
-  return null
-}
-
-// The one sentence the panel opens with. It names the culprit when there is
-// one, tells you what to close when memory is tight, and says so when
-// nothing dominates, so the reader never has to scan.
-function heroTitle(snapshot) {
-  var top = topApp(snapshot)
-  if (!snapshot || snapshot.light || !top) return "Reading…"
-  if (isTight(snapshot)) {
-    var rel = bestRelease(snapshot)
-    if (rel) return "Tight. Closing " + rel.name + " frees " + fmtMem(rel.mem)
-    return "Memory is tight"
-  }
-  var used = snapshot.mem.used
-  if (share(top.mem, used) >= 0.3) {
-    var line = top.name + " holds " + fmtMem(top.mem)
-    var site = topSite(top)
-    if (site && share(site.mem, top.mem) >= 0.35) line += ", mostly " + siteLabel(site)
-    return line
-  }
-  return top.name + " leads at " + fmtMem(top.mem) + ", no hog"
-}
-
-function heroMeta(snapshot) {
-  if (!snapshot || !snapshot.mem) return ""
-  var m = snapshot.mem
-  var parts = [fmtMem(m.used) + " of " + fmtMem(m.total)]
-  if (isTight(snapshot)) parts.push("only " + fmtMem(m.available) + " free")
-  parts.push("cpu " + Math.round(Math.min(1, loadFraction(snapshot)) * 100) + "%")
-  if (snapshot.gpu !== undefined && Number(snapshot.gpu) >= 1) parts.push("gpu " + Math.round(snapshot.gpu) + "%")
-  if (snapshot.net) parts.push("↓" + fmtRate(snapshot.net.down) + " ↑" + fmtRate(snapshot.net.up))
-  return parts.join(" · ")
 }
 
 // The bar's hover: the two numbers, nothing else.
@@ -429,25 +375,6 @@ function devtoolsNote(status) {
   return ""
 }
 
-// Hero copy for the focused view: the browser and what it is made of.
-function focusTitle(rows) {
-  if (!rows || rows.length === 0 || rows[0].type !== "header") return ""
-  var pages = 0
-  for (var i = 1; i < rows.length; i++) if (rows[i].type === "site") pages++
-  return rows[0].name + " · " + (pages === 1 ? "1 page" : pages + " pages")
-}
-
-function focusMeta(rows, snapshot) {
-  if (!rows || rows.length === 0 || rows[0].type !== "header" || !snapshot || !snapshot.mem) return ""
-  var h = rows[0]
-  var parts = [fmtMem(h.mem) + " · " + Math.round(share(h.mem, snapshot.mem.total) * 100) + "% of RAM"]
-  var cpu = fmtCpu(h.cpu)
-  if (cpu !== "") parts.push(cpu + " CPU")
-  var age = fmtAge(h.age)
-  if (age !== "") parts.push("alive " + age)
-  return parts.join(" · ")
-}
-
 // ---- Tanks. Two vertical columns beside the rows, RAM and CPU, filled
 // from the bottom with one segment per row in row order, so the heaviest
 // app sits at the bottom of both and a segment's neighbour is the same app
@@ -456,10 +383,13 @@ function focusMeta(rows, snapshot) {
 //
 // Each segment: { key, parentKey, frac, depth, rank, start } with frac of
 // the tank's full height. Whatever is left is the tank's empty top.
-function tankSegments(snapshot, rows, which) {
+function tankSegments(snapshot, rows, which, visibleCount) {
   var out = []
   if (!snapshot || !snapshot.mem || !rows || rows.length === 0) return out
   var focused = rows[0].type === "header"
+  // Only the rows on screen get a segment of their own; a sliver thinner
+  // than a pixel for row forty says nothing, so the rest fold into one.
+  var limit = visibleCount === undefined ? rows.length : visibleCount
   var total
   if (focused) total = Math.max(1, Number(rows[0][which]) || 0)
   else if (which === "cpu") total = (Number(snapshot.ncpu) || 1) * 100
@@ -471,9 +401,10 @@ function tankSegments(snapshot, rows, which) {
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i]
     if (row.type === "note" || row.type === "header") continue
-    rank++
     var v = Number(row[which]) || 0
     accounted += v
+    if (i >= limit) continue
+    rank++
     out.push({ key: row.key, parentKey: row.parentKey, frac: share(v, total), depth: row.depth, rank: rank })
   }
   // Everything the list does not show: in the focused view the pages past
@@ -618,13 +549,6 @@ function historyTrend(history) {
   return "steady"
 }
 
-function historySpan(history) {
-  if (!history || history.length < 2) return ""
-  var ms = history[history.length - 1].t - history[0].t
-  var min = Math.round(ms / 60000)
-  return min < 1 ? "" : "last " + min + " min"
-}
-
 // ---- Colour per app. A fixed palette that sits well on a dark theme,
 // picked by a hash of the row key so an app keeps its colour from sample
 // to sample and from open to open.
@@ -648,8 +572,25 @@ function columnMax(rows, which) {
   return m
 }
 
-function railCaption(snapshot, which, rows) {
+// A gauge's caption while a row is under the cursor: that app's figure
+// for that resource, in the same unit the machine's figure used.
+function rowFigure(row, which) {
+  if (!row) return ""
+  if (which === "mem") return fmtMem(row.mem)
+  if (which === "cpu") return fmtCpu(row.cpu)
+  if (which === "gpu") return fmtGpu(row.gpu)
+  if (which === "disk") return fmtDisk(row.disk)
+  if (which === "net") return fmtNet(row.net) + " sockets"
+  return ""
+}
+
+function railCaption(snapshot, which, rows, history) {
   if (!snapshot || !snapshot.mem) return ""
+  if (which === "mem" && history) {
+    var trend = historyTrend(history)
+    var base = (rows && rows.length > 0 && rows[0].type === "header") ? fmtMem(rows[0].mem) + " of " + fmtMem(snapshot.mem.total) : fmtMem(snapshot.mem.used) + " of " + fmtMem(snapshot.mem.total)
+    return trend !== "" ? base + " · " + trend : base
+  }
   // Focused on a browser, the rails are the browser's, so are the captions.
   if (rows && rows.length > 0 && rows[0].type === "header") {
     var h = rows[0]
