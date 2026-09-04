@@ -20,15 +20,21 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
   click posts that as a notification. Right click opens btop.
 - **Panel (left click):** one sentence up top, for example
   "Chromium holds 3.4 GB, mostly cursor.com", or when memory is tight,
-  "Tight. Closing cursor.com frees 1.7 GB". Under it a sparkline of RAM for
-  the last half hour with CPU dotted behind it and a one-word trend. Then
-  two tanks, RAM and CPU, beside the ten heaviest apps, each with its icon.
-  Each tank segment is a row, heaviest at the bottom in both, so the same
-  app sits at the same height in each. Hover a segment or a row and the
-  tanks dim to that one segment, lit in the accent, with a line drawn from
-  it to the row. Segments and rows slide to their new places when a sample
-  changes the order. There is no "and n more"; what does not make the top
-  ten is not what is slowing the machine.
+  "Tight. Closing cursor.com frees 1.7 GB", with the totals under it: RAM,
+  CPU, GPU and the network rate. Under that a sparkline of RAM for the last
+  half hour with CPU dotted behind it and a one-word trend. Then three
+  tanks, RAM, CPU and GPU, beside the ten heaviest apps, each with its icon
+  and its CPU, RAM, GPU and NET figures. Each tank segment is a row, in row
+  order in all three, so the same app sits at the same height in each.
+  Hover a segment or a row and the tanks dim to that one segment, lit in
+  the accent, with a band drawn tank to tank and into the row. The tanks
+  are painted on a canvas that morphs from one sample to the next, so a
+  change in size or order flows rather than snaps. There is no "and n
+  more"; what does not make the top ten is not what is slowing the machine.
+- **Sort and search.** Click a column title, or press `s`, to sort by CPU,
+  RAM, GPU, NET or name; the choice is saved to shell.json. Press `/` and
+  type to filter rows by name or title; Enter keeps the filter, Esc drops
+  it.
 - **Enter or a click** on an app brings its window to the front (btop if it
   has none). On a browser it drills into a view of only that browser's
   pages.
@@ -78,6 +84,15 @@ row says that sites appear after a restart.
 Memory is PSS from `smaps_rollup` for the heaviest 32 processes and RSS for
 the rest, so Chromium's shared pages are counted once. CPU is the classic
 per-core percent from `/proc/<pid>/stat` deltas, summed per app.
+
+GPU comes from the DRM driver's per-client counters in `/proc/<pid>/fdinfo`
+(the i915 `drm-engine-*` busy times), so it is per process without root,
+for the sixty heaviest processes. The GPU tank's total is one full engine.
+
+Network is the one thing the kernel will not give an unprivileged reader
+per process: byte counts per socket need root or eBPF. So the NET column is
+the number of open sockets per app, which still points at who is talking,
+and the hero shows the machine's own receive and send rate.
 
 ## Install
 

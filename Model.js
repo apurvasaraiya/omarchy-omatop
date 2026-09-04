@@ -18,6 +18,24 @@ function fmtCpu(pct) {
   return Math.round(n) + "%"
 }
 
+function fmtGpu(pct) {
+  var n = Number(pct) || 0
+  if (n < 0.5) return ""
+  return Math.round(n) + "%"
+}
+
+function fmtNet(count) {
+  var n = Number(count) || 0
+  return n > 0 ? String(n) : ""
+}
+
+function fmtRate(bytesPerSec) {
+  var n = Number(bytesPerSec) || 0
+  if (n < 1024) return "0 kB/s"
+  if (n < 1024 * 1024) return Math.round(n / 1024) + " kB/s"
+  return (n / (1024 * 1024)).toFixed(1) + " MB/s"
+}
+
 function fmtLoad(load) {
   if (!load || load.length < 1) return ""
   return (Number(load[0]) || 0).toFixed(1)
@@ -122,10 +140,11 @@ function heroTitle(snapshot) {
 function heroMeta(snapshot) {
   if (!snapshot || !snapshot.mem) return ""
   var m = snapshot.mem
-  var parts = [fmtMem(m.used) + " of " + fmtMem(m.total) + " in use"]
+  var parts = [fmtMem(m.used) + " of " + fmtMem(m.total)]
   if (isTight(snapshot)) parts.push("only " + fmtMem(m.available) + " free")
-  var load = fmtLoad(snapshot.load)
-  if (load !== "") parts.push("load " + load + (snapshot.ncpu ? " on " + snapshot.ncpu + " cores" : ""))
+  parts.push("cpu " + Math.round(Math.min(1, loadFraction(snapshot)) * 100) + "%")
+  if (snapshot.gpu !== undefined && Number(snapshot.gpu) >= 1) parts.push("gpu " + Math.round(snapshot.gpu) + "%")
+  if (snapshot.net) parts.push("↓" + fmtRate(snapshot.net.down) + " ↑" + fmtRate(snapshot.net.up))
   return parts.join(" · ")
 }
 
@@ -157,6 +176,8 @@ function appRow(app, asHeader) {
     subtitle: asHeader ? "" : (app.title || (app.count > 1 ? app.count + " processes" : "")),
     mem: app.mem,
     cpu: app.cpu,
+    gpu: app.gpu || 0,
+    net: app.net || 0,
     age: app.age || 0,
     count: app.count || 1,
     pids: app.pids,
@@ -195,6 +216,8 @@ function appendBrowserRows(rows, app) {
   var selfPids = []
   var selfMem = 0
   var selfCpu = 0
+  var selfGpu = 0
+  var selfNet = 0
   for (var j = 0; j < app.sites.length; j++) {
     var site = app.sites[j]
     if (site.kind === "site") pages.push(site)
@@ -202,6 +225,8 @@ function appendBrowserRows(rows, app) {
       selfPids = selfPids.concat(site.pids)
       selfMem += site.mem
       selfCpu += site.cpu
+      selfGpu += site.gpu || 0
+      selfNet += site.net || 0
     }
   }
   for (var k = 0; k < Math.min(pages.length, MAX_PAGES); k++) {
@@ -215,6 +240,8 @@ function appendBrowserRows(rows, app) {
       subtitle: siteSubtitle(page),
       mem: page.mem,
       cpu: page.cpu,
+      gpu: page.gpu || 0,
+      net: page.net || 0,
       age: page.age || 0,
       count: page.pids.length,
       pids: page.pids,
@@ -242,6 +269,8 @@ function appendBrowserRows(rows, app) {
       subtitle: "extensions, GPU, network, background pages",
       mem: selfMem,
       cpu: Math.round(selfCpu * 10) / 10,
+      gpu: Math.round(selfGpu * 10) / 10,
+      net: selfNet,
       age: 0,
       count: selfPids.length,
       pids: selfPids,
@@ -257,11 +286,45 @@ function appendBrowserRows(rows, app) {
       parentKey: app.key,
       name: devtoolsNote(app.devtools),
       comm: "",
-      subtitle: "", mem: 0, cpu: 0, age: 0, count: 0, pids: [], root: 0, protectedRow: true,
+      subtitle: "", mem: 0, cpu: 0, gpu: 0, net: 0, age: 0, count: 0, pids: [], root: 0, protectedRow: true,
       drillable: false, closable: false, browser: false,
       devtools: "", profile: "", targets: [], omarchy: false, icon: "", iconName: "", depth: 1
     })
   }
+}
+
+// ---- Sorting and search. The header stays first and the browser's own
+// row last; everything between sorts by the chosen column. A query keeps
+// the rows whose name or subtitle contains it.
+var SORTS = ["mem", "cpu", "gpu", "net", "name"]
+var SORT_LABELS = { mem: "RAM", cpu: "CPU", gpu: "GPU", net: "NET", name: "APP" }
+
+function nextSort(current) {
+  var i = SORTS.indexOf(current)
+  return SORTS[(i + 1) % SORTS.length]
+}
+
+function arrangeRows(rows, sortKey, query) {
+  var q = String(query || "").toLowerCase().trim()
+  var head = []
+  var body = []
+  var tail = []
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i]
+    if (r.type === "header") { head.push(r); continue }
+    if (r.type === "note") { tail.push(r); continue }
+    if (q !== "" && r.type !== "bucket" && (r.name + " " + r.subtitle).toLowerCase().indexOf(q) < 0) continue
+    if (r.type === "bucket") tail.unshift(r)
+    else body.push(r)
+  }
+  var keyed = body.map(function(r, idx) { return { r: r, idx: idx } })
+  keyed.sort(function(a, b) {
+    var d
+    if (sortKey === "name") d = a.r.name.toLowerCase() < b.r.name.toLowerCase() ? -1 : (a.r.name.toLowerCase() > b.r.name.toLowerCase() ? 1 : 0)
+    else d = (Number(b.r[sortKey]) || 0) - (Number(a.r[sortKey]) || 0)
+    return d !== 0 ? d : a.idx - b.idx
+  })
+  return head.concat(keyed.map(function(k) { return k.r }), tail)
 }
 
 function siteSubtitle(site) {
@@ -313,25 +376,56 @@ function tankSegments(snapshot, rows, which) {
   if (!snapshot || !snapshot.mem || !rows || rows.length === 0) return out
   var focused = rows[0].type === "header"
   var total
-  if (focused) total = Math.max(1, which === "cpu" ? rows[0].cpu : rows[0].mem)
-  else total = which === "cpu" ? (Number(snapshot.ncpu) || 1) * 100 : snapshot.mem.total
+  if (focused) total = Math.max(1, Number(rows[0][which]) || 0)
+  else if (which === "cpu") total = (Number(snapshot.ncpu) || 1) * 100
+  else if (which === "gpu") total = 100
+  else total = snapshot.mem.total
   var accounted = 0
   var rank = -1
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i]
     if (row.type === "note" || row.type === "header") continue
     rank++
-    var v = which === "cpu" ? row.cpu : row.mem
+    var v = Number(row[which]) || 0
     accounted += v
     out.push({ key: row.key, parentKey: row.parentKey, frac: share(v, total), depth: row.depth, rank: rank })
   }
   // Everything the list does not show: in the focused view the pages past
   // the cut; in the app view the tail of small apps, other users, the
   // kernel, where memory uses the machine's own number for that.
-  var used = focused ? total : (which === "cpu" ? Math.min(total, (Number(snapshot.load[0]) || 0) * 100) : snapshot.mem.used)
+  var used
+  if (focused) used = total
+  else if (which === "cpu") used = Math.min(total, (Number(snapshot.load[0]) || 0) * 100)
+  else if (which === "gpu") used = Math.min(100, Number(snapshot.gpu) || 0)
+  else used = snapshot.mem.used
   var rest = used - accounted
   if (rest > total * 0.005) out.push({ key: "rest", parentKey: "", frac: share(rest, total), depth: 0, rank: 99 })
   return stackSegments(out)
+}
+
+// ---- Morphing between two stacked layouts. Keys present on both sides
+// slide; a key only on the new side grows out of its final place; a key
+// only on the old side shrinks where it stood.
+function lerp(a, b, t) { return a + (b - a) * t }
+
+function morphSegments(fromMap, toList, t) {
+  var out = []
+  var seen = {}
+  for (var i = 0; i < toList.length; i++) {
+    var to = toList[i]
+    var from = fromMap[to.key]
+    seen[to.key] = true
+    if (!from) from = { start: to.start + to.frac / 2, frac: 0, rank: to.rank }
+    out.push({ key: to.key, start: lerp(from.start, to.start, t), frac: lerp(from.frac, to.frac, t), rank: to.rank, depth: to.depth })
+  }
+  if (t < 1) {
+    for (var key in fromMap) {
+      if (seen[key]) continue
+      var f = fromMap[key]
+      out.push({ key: key, start: lerp(f.start, f.start + f.frac / 2, t), frac: lerp(f.frac, 0, t), rank: f.rank, depth: f.depth || 0 })
+    }
+  }
+  return out
 }
 
 function stackSegments(segments) {

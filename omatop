@@ -172,6 +172,73 @@ def cmdline(pid):
     return args
 
 
+def fd_stats(pid):
+    """GPU engine time and memory from i915 fdinfo, plus open socket count.
+
+    Every fd is read once; DRM clients are deduped by client id since a
+    process usually holds several fds on the same client.
+    """
+    base = "/proc/%d/fd" % pid
+    try:
+        fds = os.listdir(base)
+    except OSError:
+        return None
+    gpu_ns = 0
+    gpu_mem = 0
+    sockets = 0
+    clients = set()
+    for fd in fds:
+        try:
+            target = os.readlink(base + "/" + fd)
+        except OSError:
+            continue
+        if target.startswith("socket:["):
+            sockets += 1
+            continue
+        if not target.startswith("/dev/dri/"):
+            continue
+        info = read("/proc/%d/fdinfo/%s" % (pid, fd), 4096)
+        client = ""
+        ns = 0
+        mem = 0
+        for line in info.splitlines():
+            if line.startswith("drm-client-id:"):
+                client = line.split(":", 1)[1].strip()
+            elif line.startswith("drm-engine-render:") or line.startswith("drm-engine-video:") or line.startswith("drm-engine-video-enhance:") or line.startswith("drm-engine-compute:"):
+                try:
+                    ns += int(line.split(":", 1)[1].strip().split()[0])
+                except (ValueError, IndexError):
+                    pass
+            elif line.startswith("drm-total-system0:") or line.startswith("drm-total-memory:"):
+                try:
+                    mem += int(line.split(":", 1)[1].strip().split()[0])
+                except (ValueError, IndexError):
+                    pass
+        if client and client in clients:
+            continue
+        clients.add(client)
+        gpu_ns += ns
+        gpu_mem += mem
+    return {"gpu_ns": gpu_ns, "gpu_mem": gpu_mem, "sockets": sockets}
+
+
+def net_bytes():
+    """Total received and sent bytes over every interface but loopback."""
+    rx = tx = 0
+    for line in read("/proc/net/dev").splitlines()[2:]:
+        name, _, rest = line.partition(":")
+        if name.strip() == "lo":
+            continue
+        f = rest.split()
+        if len(f) >= 9:
+            try:
+                rx += int(f[0])
+                tx += int(f[8])
+            except ValueError:
+                pass
+    return rx, tx
+
+
 def hypr_titles():
     """pid -> window title, from Hyprland. Empty when hyprctl is missing."""
     try:
@@ -622,11 +689,24 @@ class Sampler:
         self.favicons = {}   # profile dir -> FaviconStore
         self.pss_budget = 32
         self.order = []      # row keys in last-published order, for stable sorting
+        self.prev_gpu = {}   # pid -> (gpu ns, monotonic time)
+        self.prev_net = None # (rx, tx, monotonic time)
         self.webapps = omarchy_webapps()
         self.webapps_read = time.monotonic()
 
+    def net_rate(self):
+        now = time.monotonic()
+        rx, tx = net_bytes()
+        rate = {"down": 0, "up": 0}
+        if self.prev_net is not None:
+            dt = now - self.prev_net[2]
+            if dt > 0:
+                rate = {"down": max(0, int((rx - self.prev_net[0]) / dt)), "up": max(0, int((tx - self.prev_net[1]) / dt))}
+        self.prev_net = (rx, tx, now)
+        return rate
+
     def light(self):
-        return {"ts": time.time(), "light": True, "mem": meminfo(), "load": loadavg(), "ncpu": NCPU}
+        return {"ts": time.time(), "light": True, "mem": meminfo(), "load": loadavg(), "ncpu": NCPU, "net": self.net_rate()}
 
     def full(self):
         now = time.monotonic()
@@ -652,6 +732,31 @@ class Sampler:
             v = pss_kb(pid)
             if v is not None:
                 mem[pid] = v
+
+        # GPU time, GPU memory and sockets for the processes that matter:
+        # the fd walk is the costly part, so it stops at the sixty heaviest.
+        gpu_pct = {}
+        gpu_mem = {}
+        sockets = {}
+        for pid in sorted(procs, key=lambda x: procs[x]["rss"], reverse=True)[:60]:
+            st = fd_stats(pid)
+            if st is None:
+                continue
+            sockets[pid] = st["sockets"]
+            gpu_mem[pid] = st["gpu_mem"]
+            prev = self.prev_gpu.get(pid)
+            if prev is not None:
+                dt = now - prev[1]
+                if dt > 0:
+                    gpu_pct[pid] = max(0.0, min(100.0, (st["gpu_ns"] - prev[0]) / 1e9 / dt * 100.0))
+            self.prev_gpu[pid] = (st["gpu_ns"], now)
+        for pid in list(self.prev_gpu):
+            if pid not in procs:
+                del self.prev_gpu[pid]
+        self.gpu_pct = gpu_pct
+        self.gpu_mem = gpu_mem
+        self.sockets = sockets
+        net = self.net_rate()
 
         titles = hypr_titles()
 
@@ -688,6 +793,9 @@ class Sampler:
                 "count": len(pids),
                 "mem": sum(mem[p] for p in pids),
                 "cpu": round(sum(cpu_pct.get(p, 0.0) for p in pids), 1),
+                "gpu": round(sum(gpu_pct.get(p, 0.0) for p in pids), 1),
+                "gpuMem": sum(gpu_mem.get(p, 0) for p in pids),
+                "net": sum(sockets.get(p, 0) for p in pids),
                 "age": rp["age"],
                 "protected": bool(comms & PROTECTED_COMMS),
                 "browser": comm in BROWSER_COMMS,
@@ -702,7 +810,8 @@ class Sampler:
         for app in apps:
             if "sites" in app:
                 app["sites"] = self.stable_sort(app["sites"])
-        return {"ts": time.time(), "light": False, "mem": meminfo(), "load": loadavg(), "ncpu": NCPU, "apps": apps}
+        return {"ts": time.time(), "light": False, "mem": meminfo(), "load": loadavg(), "ncpu": NCPU,
+                "gpu": round(min(100.0, sum(gpu_pct.values())), 1), "net": net, "apps": apps}
 
     def stable_sort(self, rows):
         rank = {key: i for i, key in enumerate(self.order)}
@@ -758,6 +867,8 @@ class Sampler:
                 "pids": pids,
                 "mem": sum(mem[p] for p in pids),
                 "cpu": round(sum(cpu_pct.get(p, 0.0) for p in pids), 1),
+                "gpu": round(sum(self.gpu_pct.get(p, 0.0) for p in pids), 1),
+                "net": sum(self.sockets.get(p, 0) for p in pids),
                 "age": max([procs[p]["age"] for p in pids] or [0]),
                 "closable": True,
             })
@@ -770,6 +881,8 @@ class Sampler:
                 "pids": sorted(members),
                 "mem": sum(mem[p] for p in members),
                 "cpu": round(sum(cpu_pct.get(p, 0.0) for p in members), 1),
+                "gpu": round(sum(self.gpu_pct.get(p, 0.0) for p in members), 1),
+                "net": sum(self.sockets.get(p, 0) for p in members),
                 "closable": False,
             })
 
@@ -814,11 +927,11 @@ def cmd_watch(args):
         except BrokenPipeError:
             return 0
         if interval == 0:
-            # --once still needs two samples for CPU%; take the second quickly.
-            if light or snap.get("cpuSampled"):
+            # --once still needs two samples for rates; take the second quickly.
+            if snap.get("cpuSampled"):
                 return 0
             time.sleep(0.6)
-            snap = sampler.full()
+            snap = sampler.light() if light else sampler.full()
             snap["cpuSampled"] = True
             out.write(json.dumps(snap, separators=(",", ":")) + "\n")
             out.flush()
