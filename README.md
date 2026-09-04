@@ -18,15 +18,17 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
   active colour and breathes slowly. A click squashes it and the liquid
   settles back. Hover shows "CPU 45% · RAM 9.5 GB" and nothing else. Middle
   click posts that as a notification. Right click opens btop.
-- **Panel (left click):** a search field on top, then tanks beside a
-  list of up to fifty apps that scrolls. RAM and CPU always stand; GPU and
-  DISK step in when they have work to show (or when the list is sorted by
-  them) and step out again. Each tank fills from the bottom with one
-  segment per row on screen, in that row's colour; everything below the
-  fold folds into one quiet block. Hover a row or a segment and the tanks
-  dim to that one app and a band in its colour runs tank to tank and into
-  the row. One line of figures under the list carries every resource,
-  tank or not, with units. Nothing is blank: a quiet 0 is a real zero.
+- **Panel (left click):** a search field on top, five gauges standing in a
+  row under it, and a list of up to fifty apps that scrolls. Each gauge is
+  one resource, RAM, CPU, GPU, DISK, NET, filled from the bottom by app,
+  every app in its own colour, with the machine's figure captioned below.
+  Read together they are a skyline: the tallest fill is the pressure and
+  the colours say who, before any number. The same colour marks the app's
+  row. Hover a row or a segment and the gauges dim to that one app. Every
+  number in the list sits over a hairline scaled to the column's largest
+  value, so a column reads as a chart. Nothing is blank: a quiet 0 is a
+  real zero, and DISK carries its unit. SOCKETS is the network column's
+  honest name.
 - **Omarchy web apps** are Chromium windows, but they live on the desktop
   as apps, so they are listed as apps: their own row, their own colour,
   the app's icon with a small Chromium badge, and the Chromium row holds
