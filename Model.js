@@ -14,19 +14,24 @@ function fmtMem(kb) {
 
 function fmtCpu(pct) {
   var n = Number(pct) || 0
-  if (n < 0.5) return ""
   return Math.round(n) + "%"
 }
 
 function fmtGpu(pct) {
   var n = Number(pct) || 0
-  if (n < 0.5) return ""
   return Math.round(n) + "%"
 }
 
 function fmtNet(count) {
-  var n = Number(count) || 0
-  return n > 0 ? String(n) : ""
+  return String(Number(count) || 0)
+}
+
+// Disk in the row: compact, no unit noise below a kilobyte a second.
+function fmtDisk(bytesPerSec) {
+  var n = Number(bytesPerSec) || 0
+  if (n < 1024) return "0"
+  if (n < 1024 * 1024) return Math.round(n / 1024) + "k"
+  return (n / (1024 * 1024)).toFixed(1) + "M"
 }
 
 function fmtRate(bytesPerSec) {
@@ -173,11 +178,12 @@ function appRow(app, asHeader) {
     parentKey: "",
     name: app.name,
     comm: app.comm || "",
-    subtitle: asHeader ? "" : (app.title || (app.count > 1 ? app.count + " processes" : "")),
+    subtitle: asHeader ? "" : appSubtitle(app),
     mem: app.mem,
     cpu: app.cpu,
     gpu: app.gpu || 0,
     net: app.net || 0,
+    disk: app.disk || 0,
     age: app.age || 0,
     count: app.count || 1,
     pids: app.pids,
@@ -194,6 +200,20 @@ function appRow(app, asHeader) {
     iconName: "",
     depth: 0
   }
+}
+
+function appSubtitle(app) {
+  if (app.browser && app.sites) {
+    var pages = 0
+    var webapps = 0
+    for (var i = 0; i < app.sites.length; i++) {
+      if (app.sites[i].kind !== "site") continue
+      pages++
+      if (app.sites[i].omarchy) webapps++
+    }
+    if (pages > 0) return pages + (pages === 1 ? " page" : " pages") + (webapps > 0 ? " · " + webapps + " Omarchy " + (webapps === 1 ? "app" : "apps") : "")
+  }
+  return app.title || (app.count > 1 ? app.count + " processes" : "")
 }
 
 function buildRows(snapshot, focusKey, maxApps) {
@@ -218,6 +238,7 @@ function appendBrowserRows(rows, app) {
   var selfCpu = 0
   var selfGpu = 0
   var selfNet = 0
+  var selfDisk = 0
   for (var j = 0; j < app.sites.length; j++) {
     var site = app.sites[j]
     if (site.kind === "site") pages.push(site)
@@ -227,6 +248,7 @@ function appendBrowserRows(rows, app) {
       selfCpu += site.cpu
       selfGpu += site.gpu || 0
       selfNet += site.net || 0
+      selfDisk += site.disk || 0
     }
   }
   for (var k = 0; k < Math.min(pages.length, MAX_PAGES); k++) {
@@ -242,6 +264,7 @@ function appendBrowserRows(rows, app) {
       cpu: page.cpu,
       gpu: page.gpu || 0,
       net: page.net || 0,
+      disk: page.disk || 0,
       age: page.age || 0,
       count: page.pids.length,
       pids: page.pids,
@@ -271,6 +294,7 @@ function appendBrowserRows(rows, app) {
       cpu: Math.round(selfCpu * 10) / 10,
       gpu: Math.round(selfGpu * 10) / 10,
       net: selfNet,
+      disk: selfDisk,
       age: 0,
       count: selfPids.length,
       pids: selfPids,
@@ -286,7 +310,7 @@ function appendBrowserRows(rows, app) {
       parentKey: app.key,
       name: devtoolsNote(app.devtools),
       comm: "",
-      subtitle: "", mem: 0, cpu: 0, gpu: 0, net: 0, age: 0, count: 0, pids: [], root: 0, protectedRow: true,
+      subtitle: "", mem: 0, cpu: 0, gpu: 0, net: 0, disk: 0, age: 0, count: 0, pids: [], root: 0, protectedRow: true,
       drillable: false, closable: false, browser: false,
       devtools: "", profile: "", targets: [], omarchy: false, icon: "", iconName: "", depth: 1
     })
@@ -296,8 +320,8 @@ function appendBrowserRows(rows, app) {
 // ---- Sorting and search. The header stays first and the browser's own
 // row last; everything between sorts by the chosen column. A query keeps
 // the rows whose name or subtitle contains it.
-var SORTS = ["mem", "cpu", "gpu", "net", "name"]
-var SORT_LABELS = { mem: "RAM", cpu: "CPU", gpu: "GPU", net: "NET", name: "APP" }
+var SORTS = ["mem", "cpu", "gpu", "disk", "net", "name"]
+var SORT_LABELS = { mem: "RAM", cpu: "CPU", gpu: "GPU", disk: "DISK", net: "NET", name: "APP" }
 
 function nextSort(current) {
   var i = SORTS.indexOf(current)
@@ -379,6 +403,7 @@ function tankSegments(snapshot, rows, which) {
   if (focused) total = Math.max(1, Number(rows[0][which]) || 0)
   else if (which === "cpu") total = (Number(snapshot.ncpu) || 1) * 100
   else if (which === "gpu") total = 100
+  else if (which === "disk") total = Math.max(Number(snapshot.disk) || 0, 1)
   else total = snapshot.mem.total
   var accounted = 0
   var rank = -1
@@ -397,6 +422,7 @@ function tankSegments(snapshot, rows, which) {
   if (focused) used = total
   else if (which === "cpu") used = Math.min(total, (Number(snapshot.load[0]) || 0) * 100)
   else if (which === "gpu") used = Math.min(100, Number(snapshot.gpu) || 0)
+  else if (which === "disk") used = Number(snapshot.disk) || 0
   else used = snapshot.mem.used
   var rest = used - accounted
   if (rest > total * 0.005) out.push({ key: "rest", parentKey: "", frac: share(rest, total), depth: 0, rank: 99 })
@@ -523,4 +549,53 @@ function historySpan(history) {
   var ms = history[history.length - 1].t - history[0].t
   var min = Math.round(ms / 60000)
   return min < 1 ? "" : "last " + min + " min"
+}
+
+// ---- Colour per app. A fixed palette that sits well on a dark theme,
+// picked by a hash of the row key so an app keeps its colour from sample
+// to sample and from open to open.
+var PALETTE = ["#f2a65a", "#7fb8e6", "#9ad48a", "#e6a0c4", "#c9a6f0", "#7fd9d0", "#f0d06a", "#f08a8a", "#a3b8f0", "#d4e08a", "#f0b7a0", "#8ad4b3", "#e0a3e6", "#a8c8ff"]
+
+function colorFor(key) {
+  var h = 0
+  var s = String(key || "")
+  for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
+  return PALETTE[h % PALETTE.length]
+}
+
+// Largest value per column among the rows, for the bars under the numbers.
+function columnMax(rows, which) {
+  var m = 0
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].type === "note" || rows[i].type === "header") continue
+    var v = Number(rows[i][which]) || 0
+    if (v > m) m = v
+  }
+  return m
+}
+
+function railCaption(snapshot, which, rows) {
+  if (!snapshot || !snapshot.mem) return ""
+  // Focused on a browser, the rails are the browser's, so are the captions.
+  if (rows && rows.length > 0 && rows[0].type === "header") {
+    var h = rows[0]
+    if (which === "mem") return fmtMem(h.mem) + " of " + fmtMem(snapshot.mem.total)
+    if (which === "cpu") return Math.round(h.cpu) + "% of " + ((Number(snapshot.ncpu) || 1) * 100) + "%"
+    if (which === "gpu") return Math.round(h.gpu) + "%"
+    if (which === "disk") return fmtRate(h.disk)
+  }
+  if (which === "mem") return fmtMem(snapshot.mem.used) + " of " + fmtMem(snapshot.mem.total)
+  if (which === "cpu") return Math.round(Math.min(1, loadFraction(snapshot)) * 100) + "%"
+  if (which === "gpu") return Math.round(Number(snapshot.gpu) || 0) + "%"
+  if (which === "disk") return fmtRate(snapshot.disk)
+  if (which === "net" && snapshot.net) return "↓ " + fmtRate(snapshot.net.down) + "  ↑ " + fmtRate(snapshot.net.up)
+  return ""
+}
+
+// The network rail has no per-app split, so it shows the machine's two
+// directions against a 10 MB/s scale, which is where a home link tops out.
+var NET_SCALE = 10 * 1024 * 1024
+function netFractions(snapshot) {
+  if (!snapshot || !snapshot.net) return { down: 0, up: 0 }
+  return { down: Math.min(1, snapshot.net.down / NET_SCALE), up: Math.min(1, snapshot.net.up / NET_SCALE) }
 }

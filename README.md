@@ -18,44 +18,40 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
   active colour and breathes slowly. A click squashes it and the liquid
   settles back. Hover shows "CPU 45% · RAM 9.5 GB" and nothing else. Middle
   click posts that as a notification. Right click opens btop.
-- **Panel (left click):** one sentence up top, for example
-  "Chromium holds 3.4 GB, mostly cursor.com", or when memory is tight,
-  "Tight. Closing cursor.com frees 1.7 GB", with the totals under it: RAM,
-  CPU, GPU and the network rate. Under that a sparkline of RAM for the last
-  half hour with CPU dotted behind it and a one-word trend. Then three
-  tanks, RAM, CPU and GPU, beside the ten heaviest apps, each with its icon
-  and its CPU, RAM, GPU and NET figures. Each tank segment is a row, in row
-  order in all three, so the same app sits at the same height in each.
-  Hover a segment or a row and the tanks dim to that one segment, lit in
-  the accent, with a band drawn tank to tank and into the row. The tanks
-  are painted on a canvas that morphs from one sample to the next, so a
-  change in size or order flows rather than snaps. There is no "and n
-  more"; what does not make the top ten is not what is slowing the machine.
-- **Sort and search.** Click a column title, or press `s`, to sort by CPU,
-  RAM, GPU, NET or name; the choice is saved to shell.json. Press `/` and
-  type to filter rows by name or title; Enter keeps the filter, Esc drops
-  it.
+- **Panel (left click):** a search field on top, five rails under it, and
+  a list of up to fifty apps that scrolls. Each rail is one resource, RAM,
+  CPU, GPU, DISK, NET, filled left to right by app, every app in its own
+  colour, with the machine's figure at the right end. The same colour marks
+  the app's row. Hover a row or a segment and the rails dim to that one
+  app. Every number in the list sits over a hairline scaled to the column's
+  largest value, so a column reads as a chart. Nothing is blank: a quiet 0
+  is a real zero.
+- **Sort and search.** Type to filter by name or title. Click a column
+  title, or press Tab, to sort by CPU, RAM, GPU, DISK, NET or name; the
+  choice is saved to shell.json.
 - **Enter or a click** on an app brings its window to the front (btop if it
   has none). On a browser it drills into a view of only that browser's
   pages.
 - **The browser view** lists every page the browser holds, with its
   favicon straight out of Chromium's own cache, and one row for the browser
-  itself (extensions, GPU, network, background pages). The tanks become the
-  browser: its pages fill them, scaled to the browser's own total. Enter or
-  a click on a page brings that tab, or web-app window, to the front. `h`,
-  Esc or the header row go back. A page row is one origin across all its
-  tabs and windows. Pages Omarchy installed as web apps are named after the
-  app, carry its icon and are tagged "Omarchy app", so YouTube, WhatsApp and
-  friends read apart from whatever else you have open.
-- **Closing:** the × on the row under the cursor, or the `x` key. One
+  itself (extensions, GPU, network, background pages). The rails become the
+  browser's, scaled to its own totals. Enter or a click on a page brings
+  that tab, or web-app window, to the front. Esc, the left arrow, or the
+  header row go back. A page row is one origin across all its tabs and
+  windows. Pages Omarchy installed as web apps are named after the app,
+  carry the app's icon with a small Chromium badge, and the browser's own
+  row counts them ("3 pages · 1 Omarchy app").
+- **Closing:** the × on the row under the cursor, or Ctrl+X. One
   confirmation, which names what closes and roughly what it frees. Sites are
   closed through DevTools, so the tab goes away cleanly. Apps get SIGTERM;
-  if one is still there five seconds later the row says so and a second `x`
-  offers a force kill. The shell, Hyprland and the session plumbing are
-  listed but never offered.
+  if one is still there five seconds later the row says so and a second
+  Ctrl+X offers a force kill. The shell, Hyprland and the session plumbing
+  are listed but never offered.
 
-Keys: `j` `k` move, `Enter` go, `l` into a browser, `h` back out, `x` close,
-`r` resample, `b` btop, `Esc` back or dismiss.
+Keys, all from the search field: type to search, `↑` `↓` (or Ctrl+J/K)
+move, `Enter` go, `→` into a browser, `←` back out, `Tab` sort, `Ctrl+X`
+close, `Esc` clears the search, then backs out, then dismisses. The
+placeholder text says as much, and gets out of the way when you type.
 
 ## How it knows which site is which
 
@@ -84,6 +80,9 @@ row says that sites appear after a restart.
 Memory is PSS from `smaps_rollup` for the heaviest 32 processes and RSS for
 the rest, so Chromium's shared pages are counted once. CPU is the classic
 per-core percent from `/proc/<pid>/stat` deltas, summed per app.
+
+Disk is bytes actually read and written per process from `/proc/<pid>/io`,
+as a rate, against the machine's own rate from `/proc/diskstats`.
 
 GPU comes from the DRM driver's per-client counters in `/proc/<pid>/fdinfo`
 (the i915 `drm-engine-*` busy times), so it is per process without root,
