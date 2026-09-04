@@ -26,12 +26,12 @@ function fmtNet(count) {
   return String(Number(count) || 0)
 }
 
-// Disk in the row: compact, no unit noise below a kilobyte a second.
+// Disk in the row, with its unit; under a kilobyte a second is a zero.
 function fmtDisk(bytesPerSec) {
   var n = Number(bytesPerSec) || 0
-  if (n < 1024) return "0"
-  if (n < 1024 * 1024) return Math.round(n / 1024) + "k"
-  return (n / (1024 * 1024)).toFixed(1) + "M"
+  if (n < 1024) return "0 kB/s"
+  if (n < 1024 * 1024) return Math.round(n / 1024) + " kB/s"
+  return (n / (1024 * 1024)).toFixed(1) + " MB/s"
 }
 
 function fmtRate(bytesPerSec) {
@@ -208,12 +208,65 @@ function appSubtitle(app) {
     var webapps = 0
     for (var i = 0; i < app.sites.length; i++) {
       if (app.sites[i].kind !== "site") continue
-      pages++
       if (app.sites[i].omarchy) webapps++
+      else pages++
     }
-    if (pages > 0) return pages + (pages === 1 ? " page" : " pages") + (webapps > 0 ? " · " + webapps + " Omarchy " + (webapps === 1 ? "app" : "apps") : "")
+    var parts = []
+    if (pages > 0) parts.push(pages + (pages === 1 ? " page" : " pages"))
+    if (webapps > 0) parts.push(webapps + " Omarchy " + (webapps === 1 ? "app" : "apps") + " above")
+    if (parts.length > 0) return parts.join(" · ")
   }
   return app.title || (app.count > 1 ? app.count + " processes" : "")
+}
+
+// An Omarchy web app is a Chromium window, but it lives on the desktop as
+// an app, so it is listed as one: its own row, in its own colour, with the
+// browser's row holding what is left.
+function webAppRow(app, page) {
+  return {
+    type: "site",
+    key: app.key + "/" + page.key,
+    parentKey: "",
+    name: siteLabel(page),
+    comm: "",
+    subtitle: "Omarchy app · " + page.name + (page.tabs > 1 ? " · " + page.tabs + " windows" : ""),
+    mem: page.mem,
+    cpu: page.cpu,
+    gpu: page.gpu || 0,
+    net: page.net || 0,
+    disk: page.disk || 0,
+    age: page.age || 0,
+    count: page.pids.length,
+    pids: page.pids,
+    root: 0,
+    protectedRow: false,
+    drillable: false,
+    closable: page.closable === true && page.targets.length > 0,
+    browser: false,
+    devtools: "",
+    profile: app.profile || "",
+    targets: page.targets,
+    omarchy: true,
+    icon: page.icon || "",
+    iconName: page.iconName || "",
+    depth: 0
+  }
+}
+
+function withoutWebApps(app) {
+  if (!app.browser || !app.sites) return app
+  var rest = Object.assign({}, app)
+  for (var i = 0; i < app.sites.length; i++) {
+    var site = app.sites[i]
+    if (site.kind !== "site" || !site.omarchy) continue
+    rest.mem = Math.max(0, rest.mem - site.mem)
+    rest.cpu = Math.max(0, rest.cpu - site.cpu)
+    rest.gpu = Math.max(0, (rest.gpu || 0) - (site.gpu || 0))
+    rest.net = Math.max(0, (rest.net || 0) - (site.net || 0))
+    rest.disk = Math.max(0, (rest.disk || 0) - (site.disk || 0))
+    rest.count = Math.max(1, (rest.count || 1) - site.pids.length)
+  }
+  return rest
 }
 
 function buildRows(snapshot, focusKey, maxApps) {
@@ -221,13 +274,21 @@ function buildRows(snapshot, focusKey, maxApps) {
   if (!snapshot || !snapshot.apps) return rows
   var focused = focusKey !== "" ? findApp(snapshot, focusKey) : null
   if (focused) {
-    rows.push(appRow(focused, true))
+    rows.push(appRow(withoutWebApps(focused), true))
     appendBrowserRows(rows, focused)
     return rows
   }
   var apps = snapshot.apps
   var limit = Math.min(apps.length, maxApps)
-  for (var i = 0; i < limit; i++) rows.push(appRow(apps[i], false))
+  for (var i = 0; i < limit; i++) {
+    var app = apps[i]
+    rows.push(appRow(withoutWebApps(app), false))
+    if (app.browser && app.sites) {
+      for (var j = 0; j < app.sites.length; j++) {
+        if (app.sites[j].kind === "site" && app.sites[j].omarchy) rows.push(webAppRow(app, app.sites[j]))
+      }
+    }
+  }
   return rows
 }
 
@@ -241,7 +302,7 @@ function appendBrowserRows(rows, app) {
   var selfDisk = 0
   for (var j = 0; j < app.sites.length; j++) {
     var site = app.sites[j]
-    if (site.kind === "site") pages.push(site)
+    if (site.kind === "site") { if (!site.omarchy) pages.push(site) }
     else {
       selfPids = selfPids.concat(site.pids)
       selfMem += site.mem
@@ -321,7 +382,7 @@ function appendBrowserRows(rows, app) {
 // row last; everything between sorts by the chosen column. A query keeps
 // the rows whose name or subtitle contains it.
 var SORTS = ["mem", "cpu", "gpu", "disk", "net", "name"]
-var SORT_LABELS = { mem: "RAM", cpu: "CPU", gpu: "GPU", disk: "DISK", net: "NET", name: "APP" }
+var SORT_LABELS = { mem: "RAM", cpu: "CPU", gpu: "GPU", disk: "DISK", net: "SOCKETS", name: "APP" }
 
 function nextSort(current) {
   var i = SORTS.indexOf(current)
@@ -403,7 +464,13 @@ function tankSegments(snapshot, rows, which) {
   if (focused) total = Math.max(1, Number(rows[0][which]) || 0)
   else if (which === "cpu") total = (Number(snapshot.ncpu) || 1) * 100
   else if (which === "gpu") total = 100
-  else if (which === "disk") total = Math.max(Number(snapshot.disk) || 0, 1)
+  else if (which === "disk") {
+    // Per-process counts and the block layer disagree a little (caches,
+    // buffering), so the gauge is whichever is larger; never over-full.
+    var sum = 0
+    for (var d = 0; d < rows.length; d++) if (rows[d].type !== "note" && rows[d].type !== "header") sum += Number(rows[d].disk) || 0
+    total = Math.max(Number(snapshot.disk) || 0, sum, 1)
+  }
   else total = snapshot.mem.total
   var accounted = 0
   var rank = -1

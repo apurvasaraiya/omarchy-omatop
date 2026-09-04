@@ -115,12 +115,10 @@ Panel {
   readonly property int colCpu: Style.space(40)
   readonly property int colMem: Style.space(56)
   readonly property int colGpu: Style.space(40)
-  readonly property int colDisk: Style.space(44)
-  readonly property int colNet: Style.space(36)
+  readonly property int colDisk: Style.space(64)
+  readonly property int colNet: Style.space(58)
   readonly property int colClose: Style.space(18)
   readonly property int colGap: Style.space(10)
-  readonly property int railLabel: Style.space(34)
-  readonly property int railCaption: Style.space(128)
 
   function open() {
     root.controller.show()
@@ -450,11 +448,13 @@ Panel {
     onTriggered: root.pendingQuits = Object.assign({}, root.pendingQuits)
   }
 
-  // ---- A rail: a rounded bar filled left to right with one segment per
+  // ---- A gauge: a rounded column filled bottom-up with one segment per
   //      row in that row's colour, painted on a canvas that morphs between
-  //      layouts. With a row under the cursor the rest of the rail dims.
-  component Rail: Item {
-    id: railItem
+  //      layouts. Five of them stand in a row above the list, a skyline of
+  //      what is full. With a row under the cursor the rest of each gauge
+  //      dims to that one app.
+  component Gauge: Item {
+    id: gaugeItem
     property var target: []
     property string label: ""
     property string caption: ""
@@ -463,19 +463,20 @@ Panel {
     property var fromMap: ({})
     property real progress: 1
 
-    readonly property real trackX: root.railLabel
-    readonly property real trackWidth: Math.max(0, width - root.railLabel - root.railCaption)
-    implicitHeight: Style.space(12)
+    readonly property int tubeWidth: Style.space(44)
+    readonly property int tubeHeight: Style.space(88)
+    readonly property real innerHeight: Math.max(0, tubeHeight - 2)
+    implicitHeight: tubeHeight + Style.space(6) + labelText.implicitHeight + Style.space(2) + captionText.implicitHeight
 
     onTargetChanged: {
-      railItem.fromMap = railItem.shownMap
-      railItem.progress = 0
+      gaugeItem.fromMap = gaugeItem.shownMap
+      gaugeItem.progress = 0
       morph.restart()
     }
 
     NumberAnimation {
       id: morph
-      target: railItem
+      target: gaugeItem
       property: "progress"
       from: 0
       to: 1
@@ -484,23 +485,22 @@ Panel {
     }
 
     onProgressChanged: repaint()
-    onTrackWidthChanged: repaint()
 
     function repaint() {
-      var next = Model.morphSegments(railItem.fromMap, railItem.target, railItem.progress)
+      var next = Model.morphSegments(gaugeItem.fromMap, gaugeItem.target, gaugeItem.progress)
       var m = {}
       for (var i = 0; i < next.length; i++) m[next[i].key] = next[i]
-      railItem.shown = next
-      railItem.shownMap = m
+      gaugeItem.shown = next
+      gaugeItem.shownMap = m
       canvas.requestPaint()
     }
 
-    function keyAt(x) {
-      var rel = (x - railItem.trackX) / Math.max(1, railItem.trackWidth)
-      for (var i = 0; i < railItem.shown.length; i++) {
-        var s = railItem.shown[i]
+    function keyAt(y) {
+      for (var i = 0; i < gaugeItem.shown.length; i++) {
+        var s = gaugeItem.shown[i]
         if (s.key === "rest") continue
-        if (rel >= s.start && rel <= s.start + s.frac) return s.key
+        var top = 1 + gaugeItem.innerHeight * (1 - s.start - s.frac)
+        if (y >= top && y <= top + gaugeItem.innerHeight * s.frac) return s.key
       }
       return ""
     }
@@ -510,28 +510,18 @@ Panel {
       function onCursorKeyChanged() { canvas.requestPaint() }
     }
 
-    Text {
-      anchors.left: parent.left
-      anchors.verticalCenter: parent.verticalCenter
-      textFormat: Text.PlainText
-      text: railItem.label
-      color: root.dim
-      font.family: root.contentFontFamily
-      font.pixelSize: Style.font.caption
-      font.letterSpacing: 1
-    }
-
     Canvas {
       id: canvas
-      x: railItem.trackX
-      width: railItem.trackWidth
-      height: parent.height
+      anchors.top: parent.top
+      anchors.horizontalCenter: parent.horizontalCenter
+      width: gaugeItem.tubeWidth
+      height: gaugeItem.tubeHeight
 
       onPaint: {
         var ctx = getContext("2d")
         ctx.reset()
         var w = width, h = height
-        var r = h / 2
+        var r = Math.min(Style.cornerRadius + 2, w / 2)
         var fg = root.contentForeground
 
         function rounded(x, y, rw, rh, rr) {
@@ -548,59 +538,78 @@ Panel {
           ctx.closePath()
         }
 
-        rounded(0, 0, w, h, r)
-        ctx.fillStyle = Qt.alpha(fg, 0.07)
+        rounded(0.5, 0.5, w - 1, h - 1, r)
+        ctx.fillStyle = Qt.alpha(fg, 0.06)
         ctx.fill()
         ctx.save()
         ctx.clip()
 
         var hovering = root.cursorKey !== ""
-        for (var i = 0; i < railItem.shown.length; i++) {
-          var s = railItem.shown[i]
-          var x0 = w * s.start
-          var sw = w * s.frac
-          if (sw < 0.5) continue
+        var inner = gaugeItem.innerHeight
+        for (var i = 0; i < gaugeItem.shown.length; i++) {
+          var s = gaugeItem.shown[i]
+          var top = 1 + inner * (1 - s.start - s.frac)
+          var sh = inner * s.frac
+          if (sh < 0.5) continue
           var hot = hovering && s.key === root.cursorKey
-          var alpha
-          var col
+          var col, alpha
           if (s.key === "rest") { col = fg; alpha = 0.16 }
           else { col = Model.colorFor(s.key); alpha = 0.92 }
           if (hovering && !hot) alpha *= 0.22
           ctx.fillStyle = Qt.alpha(col, alpha)
-          ctx.fillRect(x0, 0, Math.max(0.5, sw - 1), h)
+          ctx.fillRect(1, top, w - 2, Math.max(0.5, sh - 1))
         }
         ctx.restore()
+
+        rounded(0.5, 0.5, w - 1, h - 1, r)
+        ctx.strokeStyle = Qt.alpha(fg, 0.2)
+        ctx.lineWidth = 1
+        ctx.stroke()
+      }
+
+      MouseArea {
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onPositionChanged: function(mouse) {
+          if (!pointerGate.moved(gaugeItem, mouse)) return
+          var key = gaugeItem.keyAt(mouse.y)
+          if (key !== "") root.setCursorKey(key)
+        }
+        onClicked: function(mouse) {
+          var key = gaugeItem.keyAt(mouse.y)
+          if (key !== "") root.activate(root.rowMap[key] || null)
+        }
       }
     }
 
     Text {
-      anchors.right: parent.right
-      anchors.verticalCenter: parent.verticalCenter
+      id: labelText
+      anchors.top: canvas.bottom
+      anchors.topMargin: Style.space(6)
+      anchors.horizontalCenter: parent.horizontalCenter
       textFormat: Text.PlainText
-      text: railItem.caption
+      text: gaugeItem.label
+      color: root.contentForeground
+      font.family: root.contentFontFamily
+      font.pixelSize: Style.font.caption
+      font.bold: true
+      font.letterSpacing: 1.2
+    }
+
+    Text {
+      id: captionText
+      anchors.top: labelText.bottom
+      anchors.topMargin: Style.space(2)
+      anchors.horizontalCenter: parent.horizontalCenter
+      textFormat: Text.PlainText
+      text: gaugeItem.caption
       color: root.dim
       font.family: root.contentFontFamily
       font.pixelSize: Style.font.caption
-      horizontalAlignment: Text.AlignRight
-      width: root.railCaption - Style.space(4)
-      elide: Text.ElideLeft
-    }
-
-    MouseArea {
-      x: railItem.trackX
-      width: railItem.trackWidth
-      height: parent.height
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onPositionChanged: function(mouse) {
-        if (!pointerGate.moved(railItem, mouse)) return
-        var key = railItem.keyAt(mouse.x + railItem.trackX)
-        if (key !== "") root.setCursorKey(key)
-      }
-      onClicked: function(mouse) {
-        var key = railItem.keyAt(mouse.x + railItem.trackX)
-        if (key !== "") root.activate(root.rowMap[key] || null)
-      }
+      horizontalAlignment: Text.AlignHCenter
+      width: parent.width
+      elide: Text.ElideRight
     }
   }
 
@@ -611,7 +620,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: searchField
-    contentWidth: panel.fittedContentWidth(Style.space(640))
+    contentWidth: panel.fittedContentWidth(Style.space(660))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
     popoutSwitching: root.popoutSwitching
     popoutSwitchClosing: root.popoutSwitchClosing
@@ -643,71 +652,100 @@ Panel {
           onTextChanged: { root.clearCursor(); list.positionViewAtBeginning() }
         }
 
-        // ---------- Rails ----------
-        Column {
+        // ---------- Gauges: five columns standing together ----------
+        Row {
+          id: gauges
           width: parent.width
-          spacing: Style.space(6)
+          readonly property int cell: Math.floor(width / 5)
 
-          Rail { width: parent.width; target: root.memSegments; label: "RAM"; caption: Model.railCaption(root.snapshot, "mem", root.rows) }
-          Rail { width: parent.width; target: root.cpuSegments; label: "CPU"; caption: Model.railCaption(root.snapshot, "cpu", root.rows) }
-          Rail { width: parent.width; target: root.gpuSegments; label: "GPU"; caption: Model.railCaption(root.snapshot, "gpu", root.rows) }
-          Rail { width: parent.width; target: root.diskSegments; label: "DISK"; caption: Model.railCaption(root.snapshot, "disk", root.rows) }
+          Gauge { width: gauges.cell; target: root.memSegments; label: "RAM"; caption: Model.railCaption(root.snapshot, "mem", root.rows) }
+          Gauge { width: gauges.cell; target: root.cpuSegments; label: "CPU"; caption: Model.railCaption(root.snapshot, "cpu", root.rows) }
+          Gauge { width: gauges.cell; target: root.gpuSegments; label: "GPU"; caption: Model.railCaption(root.snapshot, "gpu", root.rows) }
+          Gauge { width: gauges.cell; target: root.diskSegments; label: "DISK"; caption: Model.railCaption(root.snapshot, "disk", root.rows) }
 
-          // The network rail is the machine's, not split by app: the
-          // kernel does not say which process a byte belonged to. Two
-          // thin bars, down over up, against a 10 MB/s scale.
+          // The network gauge is the machine's, not split by app: the kernel
+          // does not say which process a byte belonged to. Two columns in
+          // one tube, down beside up, against a 10 MB/s scale.
           Item {
-            width: parent.width
-            implicitHeight: Style.space(12)
+            id: netGauge
+            width: gauges.cell
+            height: gauges.height
             readonly property var fr: Model.netFractions(root.snapshot)
+            readonly property int tubeWidth: Style.space(44)
+            readonly property int tubeHeight: Style.space(88)
 
-            Text {
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.PlainText
-              text: "NET"
-              color: root.dim
-              font.family: root.contentFontFamily
-              font.pixelSize: Style.font.caption
-              font.letterSpacing: 1
-            }
+            Rectangle {
+              id: netTube
+              anchors.top: parent.top
+              anchors.horizontalCenter: parent.horizontalCenter
+              width: netGauge.tubeWidth
+              height: netGauge.tubeHeight
+              radius: Math.min(Style.cornerRadius + 2, width / 2)
+              color: Qt.alpha(root.contentForeground, 0.06)
+              border.width: 1
+              border.color: Qt.alpha(root.contentForeground, 0.2)
+              clip: true
 
-            Column {
-              x: root.railLabel
-              width: Math.max(0, parent.width - root.railLabel - root.railCaption)
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: 2
+              Row {
+                anchors.fill: parent
+                anchors.margins: 1
+                spacing: 1
 
-              Repeater {
-                model: [parent.parent.fr.down, parent.parent.fr.up]
-                Rectangle {
-                  required property var modelData
-                  required property int index
-                  width: parent.width
-                  height: Style.space(5)
-                  radius: height / 2
-                  color: Qt.alpha(root.contentForeground, 0.07)
-                  Rectangle {
+                Repeater {
+                  model: [netGauge.fr.down, netGauge.fr.up]
+                  Item {
+                    required property var modelData
+                    required property int index
+                    width: (parent.width - 1) / 2
                     height: parent.height
-                    radius: parent.radius
-                    width: Math.max(0, Math.round(parent.width * modelData))
-                    color: Qt.alpha(root.accent, index === 0 ? 0.9 : 0.55)
-                    Behavior on width { NumberAnimation { duration: 800; easing.type: Easing.InOutCubic } }
+                    Rectangle {
+                      anchors.bottom: parent.bottom
+                      width: parent.width
+                      height: Math.max(0, Math.round(parent.height * modelData))
+                      color: Qt.alpha(root.accent, index === 0 ? 0.9 : 0.5)
+                      Behavior on height { NumberAnimation { duration: 800; easing.type: Easing.InOutCubic } }
+                    }
+                    Text {
+                      anchors.bottom: parent.bottom
+                      anchors.bottomMargin: Style.space(3)
+                      anchors.horizontalCenter: parent.horizontalCenter
+                      textFormat: Text.PlainText
+                      text: index === 0 ? "↓" : "↑"
+                      color: Qt.alpha(root.contentForeground, 0.5)
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.caption
+                    }
                   }
                 }
               }
             }
 
             Text {
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
+              id: netLabel
+              anchors.top: netTube.bottom
+              anchors.topMargin: Style.space(6)
+              anchors.horizontalCenter: parent.horizontalCenter
+              textFormat: Text.PlainText
+              text: "NET"
+              color: root.contentForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: 1.2
+            }
+
+            Text {
+              anchors.top: netLabel.bottom
+              anchors.topMargin: Style.space(2)
+              anchors.horizontalCenter: parent.horizontalCenter
               textFormat: Text.PlainText
               text: Model.railCaption(root.snapshot, "net")
               color: root.dim
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.caption
-              horizontalAlignment: Text.AlignRight
-              width: root.railCaption - Style.space(4)
+              horizontalAlignment: Text.AlignHCenter
+              width: parent.width
+              elide: Text.ElideRight
             }
           }
         }

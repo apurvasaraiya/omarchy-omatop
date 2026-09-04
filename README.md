@@ -18,14 +18,21 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
   active colour and breathes slowly. A click squashes it and the liquid
   settles back. Hover shows "CPU 45% · RAM 9.5 GB" and nothing else. Middle
   click posts that as a notification. Right click opens btop.
-- **Panel (left click):** a search field on top, five rails under it, and
-  a list of up to fifty apps that scrolls. Each rail is one resource, RAM,
-  CPU, GPU, DISK, NET, filled left to right by app, every app in its own
-  colour, with the machine's figure at the right end. The same colour marks
-  the app's row. Hover a row or a segment and the rails dim to that one
-  app. Every number in the list sits over a hairline scaled to the column's
-  largest value, so a column reads as a chart. Nothing is blank: a quiet 0
-  is a real zero.
+- **Panel (left click):** a search field on top, five gauges standing in a
+  row under it, and a list of up to fifty apps that scrolls. Each gauge is
+  one resource, RAM, CPU, GPU, DISK, NET, filled from the bottom by app,
+  every app in its own colour, with the machine's figure captioned below.
+  Read together they are a skyline: the tallest fill is the pressure and
+  the colours say who, before any number. The same colour marks the app's
+  row. Hover a row or a segment and the gauges dim to that one app. Every
+  number in the list sits over a hairline scaled to the column's largest
+  value, so a column reads as a chart. Nothing is blank: a quiet 0 is a
+  real zero, and DISK carries its unit. SOCKETS is the network column's
+  honest name.
+- **Omarchy web apps** are Chromium windows, but they live on the desktop
+  as apps, so they are listed as apps: their own row, their own colour,
+  the app's icon with a small Chromium badge, and the Chromium row holds
+  what is left ("3 pages · 1 Omarchy app above").
 - **Sort and search.** Type to filter by name or title. Click a column
   title, or press Tab, to sort by CPU, RAM, GPU, DISK, NET or name; the
   choice is saved to shell.json.
@@ -38,9 +45,8 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
   browser's, scaled to its own totals. Enter or a click on a page brings
   that tab, or web-app window, to the front. Esc, the left arrow, or the
   header row go back. A page row is one origin across all its tabs and
-  windows. Pages Omarchy installed as web apps are named after the app,
-  carry the app's icon with a small Chromium badge, and the browser's own
-  row counts them ("3 pages · 1 Omarchy app").
+  windows. Web apps are not repeated here; they have their own rows in
+  the app list.
 - **Closing:** the × on the row under the cursor, or Ctrl+X. One
   confirmation, which names what closes and roughly what it frees. Sites are
   closed through DevTools, so the tab goes away cleanly. Apps get SIGTERM;
