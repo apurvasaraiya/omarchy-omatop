@@ -130,6 +130,7 @@ BarWidget {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.togglePanel() }
+    function browser(): void { if (panelLoader.item) panelLoader.item.openBrowser() }
   }
 
   BarIconButton {

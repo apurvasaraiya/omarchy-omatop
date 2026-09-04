@@ -130,6 +130,10 @@ Panel {
     try { snap = JSON.parse(line) } catch (e) { return }
     if (!snap || snap.light) return
     root.snapshot = snap
+    if (root.pendingBrowser) {
+      root.pendingBrowser = false
+      for (var b = 0; b < snap.apps.length; b++) if (snap.apps[b].browser) { drillInto(snap.apps[b].key); break }
+    }
     if (root.focusKey !== "" && !Model.findApp(snap, root.focusKey)) root.focusKey = ""
     reconcileCursor()
     reconcilePending(snap)
@@ -186,6 +190,15 @@ Panel {
     root.focusKey = key
     clearCursor()
   }
+
+  // Straight into the browser's pages, for a keybind or the IPC.
+  function openBrowser() {
+    root.open()
+    var apps = root.snapshot && root.snapshot.apps ? root.snapshot.apps : []
+    for (var i = 0; i < apps.length; i++) if (apps[i].browser) { drillInto(apps[i].key); return }
+    root.pendingBrowser = true
+  }
+  property bool pendingBrowser: false
 
   function drillOut() {
     var back = root.focusKey
@@ -294,6 +307,7 @@ Panel {
       watchProc.running = false
       clearCursor()
       root.focusKey = ""
+      root.pendingBrowser = false
     }
   }
 
