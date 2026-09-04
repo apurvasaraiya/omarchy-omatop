@@ -270,20 +270,21 @@ Panel {
 
   // ---- Icons. Apps resolve through their desktop entry; pages carry the
   //      favicon Chromium already cached, or the web app's own icon.
-  property var iconCache: ({})
+  // Mutated in place, never reassigned: a lookup from inside a binding
+  // must not notify that same binding.
+  readonly property var iconCache: ({})
 
   function appIconSource(comm) {
     if (!comm) return ""
-    if (root.iconCache[comm] !== undefined) return root.iconCache[comm]
+    var cached = root.iconCache[comm]
+    if (cached !== undefined) return cached
     var src = ""
     try {
       var entry = DesktopEntries.heuristicLookup(comm)
       if (entry && entry.icon) src = Quickshell.iconPath(entry.icon, true)
       if (!src) src = Quickshell.iconPath(comm.toLowerCase(), true)
     } catch (e) { src = "" }
-    var next = Object.assign({}, root.iconCache)
-    next[comm] = src || ""
-    root.iconCache = next
+    root.iconCache[comm] = src || ""
     return src || ""
   }
 
@@ -726,7 +727,7 @@ Panel {
                         anchors.centerIn: parent
                         visible: rowItem.isHeader
                         textFormat: Text.PlainText
-                        text: ""
+                        text: "←"
                         color: root.dim
                         font.family: root.contentFontFamily
                         font.pixelSize: Style.font.body
