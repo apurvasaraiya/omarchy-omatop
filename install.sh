@@ -22,3 +22,8 @@ if omarchy plugin list 2>/dev/null | grep -q 'apurva.omatop.*enabled'; then
 else
   omarchy plugin enable apurva.omatop right --before omarchy.monitor
 fi
+
+# The V7 bar clone outlines every widget unless its entry says card:false.
+tmp=$(mktemp)
+jq '(.bar.layout[] | select(type == "array") | .[] | select(.id == "apurva.omatop")) += {"card": false}' \
+  ~/.config/omarchy/shell.json > "$tmp" && mv "$tmp" ~/.config/omarchy/shell.json
