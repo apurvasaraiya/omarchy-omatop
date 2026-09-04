@@ -6,12 +6,15 @@ import qs.Ui
 import "Model.js" as Model
 
 // The breakdown. One sentence up top says who is eating the machine, a
-// stacked bar shows the shares without numbers, and then one row per app,
-// heaviest first. A browser row opens into sites. Every row that can be
-// closed gets an × on hover and the x key, both behind one confirmation
-// that states what will be freed and what will be lost.
+// sparkline shows where memory has been for the last half hour, and then
+// two tanks, RAM and CPU, stand beside one row per app, heaviest first.
+// Each tank segment is a row: hover either and both light up, and the
+// hero's second line reads that row out. A browser row opens into pages
+// and its segment splits with it. Every row that can be closed gets an ×
+// on hover and the x key, behind one confirmation that states what will
+// be freed and what will be lost.
 //
-// BarWidget.qml owns the bar glyph and hands this panel the button to
+// BarWidget.qml owns the bar tank and hands this panel the button to
 // anchor against.
 Panel {
   id: root
@@ -23,17 +26,20 @@ Panel {
   property var hostWidget: null
   property string scriptPath: ""
   readonly property var barIdentity: hostWidget || root
+  readonly property var history: hostWidget && hostWidget.history ? hostWidget.history : []
 
   // ---- Data
   property var snapshot: null
   property var expanded: ({})
   readonly property int maxApps: Math.max(3, Number(setting("maxApps", 10)) || 10)
   readonly property var rows: Model.buildRows(snapshot, expanded, maxApps)
-  readonly property var apps: snapshot && snapshot.apps ? snapshot.apps : []
+  readonly property var memSegments: Model.stackSegments(Model.tankSegments(snapshot, rows, "mem"))
+  readonly property var cpuSegments: Model.stackSegments(Model.tankSegments(snapshot, rows, "cpu"))
 
-  // ---- Cursor: shared by keyboard and pointer. -1 is "nothing yet".
+  // ---- Cursor: shared by keyboard, rows and tank segments. -1 is "nothing yet".
   property int cursor: -1
   property string cursorKey: ""
+  readonly property var hoverRow: cursor >= 0 && cursor < rows.length ? rows[cursor] : null
 
   // ---- Confirmation and the escalation after a polite quit was ignored.
   property bool confirmOpen: false
@@ -46,6 +52,8 @@ Panel {
   readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color dim: Qt.darker(contentForeground, 1.4)
   readonly property color urgentColor: bar ? bar.urgent : Color.urgent
+  readonly property color hotColor: Color.accent
+  readonly property bool tight: Model.isTight(snapshot)
 
   function open() {
     root.controller.show()
@@ -78,9 +86,7 @@ Panel {
 
   function refresh() {
     if (!root.opened) return
-    if (watchProc.running) {
-      watchProc.running = false
-    }
+    if (watchProc.running) watchProc.running = false
     watchProc.running = true
   }
 
@@ -98,7 +104,10 @@ Panel {
     if (root.cursorKey === "") { root.cursor = -1; return }
     var idx = Model.indexOfKey(root.rows, root.cursorKey)
     if (idx >= 0) root.cursor = idx
-    else { root.cursor = Model.clampIndex(root.cursor, root.rows.length); root.cursorKey = root.cursor >= 0 ? root.rows[root.cursor].key : "" }
+    else {
+      root.cursor = Model.clampIndex(root.cursor, root.rows.length)
+      root.cursorKey = root.cursor >= 0 ? root.rows[root.cursor].key : ""
+    }
   }
 
   function reconcilePending(snap) {
@@ -127,8 +136,13 @@ Panel {
     root.cursorKey = index >= 0 && index < root.rows.length ? root.rows[index].key : ""
   }
 
+  function setCursorKey(key) {
+    var idx = Model.indexOfKey(root.rows, key)
+    if (idx >= 0 && idx !== root.cursor) setCursor(idx)
+  }
+
   function currentRow() {
-    return root.cursor >= 0 && root.cursor < root.rows.length ? root.rows[root.cursor] : null
+    return root.hoverRow
   }
 
   function activate(row) {
@@ -142,6 +156,7 @@ Panel {
     if (e[key]) delete e[key]
     else e[key] = true
     root.expanded = e
+    Qt.callLater(reconcileCursor)
   }
 
   function setExpanded(key, value) {
@@ -194,7 +209,6 @@ Panel {
   onOpenedChanged: {
     if (opened) {
       root.lastError = ""
-      root.watchSerial++
       watchProc.running = true
     } else {
       watchProc.running = false
@@ -203,8 +217,6 @@ Panel {
     }
   }
 
-  property int watchSerial: 0
-
   // The sampler streams one JSON line every two seconds while the panel is
   // open and is stopped the moment it closes.
   Process {
@@ -212,10 +224,6 @@ Panel {
     command: ["python3", root.scriptPath, "watch", "--interval", "2"]
     stdout: SplitParser {
       onRead: function(line) { root.acceptSnapshot(line) }
-    }
-    stderr: StdioCollector {
-      waitForEnd: false
-      onStreamFinished: {}
     }
   }
 
@@ -241,6 +249,68 @@ Panel {
     onTriggered: root.pendingQuits = Object.assign({}, root.pendingQuits)
   }
 
+  // ---- A tank: an outlined column filled bottom-up with one segment per
+  //      row. Hovering a segment moves the cursor to its row; the row under
+  //      the cursor paints its segment in the accent.
+  component Tank: Item {
+    id: tankItem
+    property var segments: []
+    property string label: ""
+    readonly property real innerHeight: Math.max(0, height - 2)
+
+    Rectangle {
+      anchors.fill: parent
+      radius: Math.min(Style.cornerRadius, width / 2)
+      color: Qt.alpha(root.contentForeground, 0.05)
+      border.width: 1
+      border.color: Qt.alpha(root.contentForeground, 0.22)
+      clip: true
+
+      Repeater {
+        model: tankItem.segments
+
+        Rectangle {
+          required property var modelData
+          readonly property bool hot: Model.segmentHot(modelData, root.cursorKey)
+          readonly property bool child: modelData.depth > 0
+          readonly property bool tail: modelData.key === "rest"
+          x: child ? 4 : 1
+          width: parent.width - x * 2
+          y: Math.round(1 + tankItem.innerHeight * (1 - modelData.start - modelData.frac))
+          height: Math.max(1, Math.round(tankItem.innerHeight * modelData.frac) - 1)
+          color: hot ? root.hotColor
+            : tail ? Qt.alpha(root.contentForeground, 0.12)
+            : Qt.alpha(root.contentForeground, Model.segmentAlpha(modelData.rank, modelData.depth))
+
+          Behavior on y { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+          Behavior on height { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+          Behavior on color { ColorAnimation { duration: 140 } }
+
+          MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            enabled: !parent.tail
+            cursorShape: Qt.PointingHandCursor
+            onPositionChanged: root.setCursorKey(parent.modelData.key.endsWith("/rest") ? parent.modelData.parentKey : parent.modelData.key)
+            onClicked: root.activate(root.hoverRow)
+          }
+        }
+      }
+    }
+
+    Text {
+      anchors.top: parent.bottom
+      anchors.topMargin: Style.space(4)
+      anchors.horizontalCenter: parent.horizontalCenter
+      textFormat: Text.PlainText
+      text: tankItem.label
+      color: root.dim
+      font.family: root.contentFontFamily
+      font.pixelSize: Style.font.caption
+      font.letterSpacing: 1
+    }
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -248,7 +318,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(440))
+    contentWidth: panel.fittedContentWidth(Style.space(470))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
     popoutSwitching: root.popoutSwitching
     popoutSwitchClosing: root.popoutSwitchClosing
@@ -269,13 +339,20 @@ Panel {
         blocked: root.confirmOpen
         onMoveRequested: function(dx, dy) {
           if (dy !== 0) { root.moveCursor(dy); return }
-          var row = root.currentRow()
-          if (!row || !row.expandable) return
-          root.setExpanded(row.key, dx > 0)
+          var row = root.hoverRow
+          if (!row) return
+          var target = row.expandable ? row : null
+          if (!target && row.parentKey !== "" && dx < 0) {
+            // h on a child folds the parent and lands on it.
+            var parentIdx = Model.indexOfKey(root.rows, row.parentKey)
+            if (parentIdx >= 0) { root.setCursor(parentIdx); root.setExpanded(row.parentKey, false) }
+            return
+          }
+          if (target) root.setExpanded(target.key, dx > 0)
         }
-        onActivateRequested: root.activate(root.currentRow())
-        onReturnRequested: root.activate(root.currentRow())
-        onDeleteRequested: root.requestClose(root.currentRow())
+        onActivateRequested: root.activate(root.hoverRow)
+        onReturnRequested: root.activate(root.hoverRow)
+        onDeleteRequested: root.requestClose(root.hoverRow)
         onCloseRequested: root.close()
         onTabRequested: function(direction) { root.switchPanel(direction) }
         onTextKey: function(text) {
@@ -290,37 +367,23 @@ Panel {
           anchors.top: parent.top
           spacing: Style.space(12)
 
-          // ---------- Hero: the sentence, the totals, the percentage ----------
+          // ---------- Hero: the sentence, the line under it, the percentage ----------
           Item {
             width: parent.width
-            implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, heroPercent.implicitHeight)
-
-            Text {
-              id: heroIcon
-              textFormat: Text.PlainText
-              text: "󰍛"
-              color: Model.isTight(root.snapshot) ? root.urgentColor : root.contentForeground
-              font.family: root.contentFontFamily
-              font.pixelSize: Style.font.display
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-
-              Behavior on color { ColorAnimation { duration: 200 } }
-            }
+            implicitHeight: Math.max(heroLabels.implicitHeight, heroPercent.implicitHeight)
 
             Column {
               id: heroLabels
-              anchors.left: heroIcon.right
-              anchors.leftMargin: Style.space(14)
+              anchors.left: parent.left
               anchors.right: heroPercent.left
               anchors.rightMargin: Style.space(10)
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(2)
+              spacing: Style.space(3)
 
               Text {
                 textFormat: Text.PlainText
                 text: Model.heroTitle(root.snapshot)
-                color: root.contentForeground
+                color: root.tight ? root.urgentColor : root.contentForeground
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.title
                 font.bold: true
@@ -328,10 +391,11 @@ Panel {
                 width: parent.width
               }
 
+              // The totals, or the row under the cursor in the same units.
               Text {
                 textFormat: Text.PlainText
-                text: Model.heroMeta(root.snapshot).toUpperCase()
-                color: Model.isTight(root.snapshot) ? root.urgentColor : root.dim
+                text: (root.hoverRow ? (root.hoverRow.name + " · " + Model.hoverMeta(root.hoverRow, root.snapshot)) : Model.heroMeta(root.snapshot)).toUpperCase()
+                color: root.hoverRow ? root.hotColor : (root.tight ? root.urgentColor : root.dim)
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
@@ -345,7 +409,7 @@ Panel {
               id: heroPercent
               textFormat: Text.PlainText
               text: root.snapshot ? Math.round(Model.usedFraction(root.snapshot) * 100) + "%" : "—"
-              color: Model.isTight(root.snapshot) ? root.urgentColor : root.contentForeground
+              color: root.tight ? root.urgentColor : root.contentForeground
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.displayLarge
               font.bold: true
@@ -356,216 +420,258 @@ Panel {
             }
           }
 
-          // ---------- Shares: one stacked bar, biggest app at the left ----------
-          // Position does the comparing; the numbers in the rows only confirm.
+          // ---------- Sparkline: RAM for the last half hour, CPU faint behind it ----------
           Item {
-            id: shareBar
             width: parent.width
-            implicitHeight: Style.space(8)
+            implicitHeight: Style.space(26)
+            visible: root.history.length >= 2
 
-            readonly property real total: root.snapshot && root.snapshot.mem ? root.snapshot.mem.total : 0
-            readonly property int shown: Math.min(root.apps.length, 6)
-            readonly property var alphas: Model.segmentAlphas(shown)
+            Canvas {
+              id: spark
+              anchors.left: parent.left
+              anchors.right: sparkCaption.left
+              anchors.rightMargin: Style.space(10)
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
 
-            Rectangle {
-              anchors.fill: parent
-              radius: height / 2
-              color: Qt.alpha(root.contentForeground, 0.08)
+              readonly property var points: root.history
+              readonly property color ink: root.contentForeground
+              onPointsChanged: requestPaint()
+              onInkChanged: requestPaint()
+              onWidthChanged: requestPaint()
+
+              onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+                var pts = points
+                var n = pts.length
+                if (n < 2 || width <= 0) return
+                var w = width, h = height
+                var stepX = w / (Model.HISTORY_MAX - 1)
+                var x0 = w - stepX * (n - 1)
+                function xAt(i) { return x0 + stepX * i }
+                function yAt(v) { return 1 + (h - 2) * (1 - v) }
+
+                // Faint baseline, so a flat line still reads as a chart.
+                ctx.strokeStyle = Qt.alpha(ink, 0.12)
+                ctx.lineWidth = 1
+                ctx.beginPath(); ctx.moveTo(0, h - 0.5); ctx.lineTo(w, h - 0.5); ctx.stroke()
+
+                // CPU: dotted, behind.
+                ctx.strokeStyle = Qt.alpha(ink, 0.3)
+                ctx.setLineDash([1, 3])
+                ctx.beginPath()
+                for (var c = 0; c < n; c++) { var yc = yAt(pts[c].cpu); if (c === 0) ctx.moveTo(xAt(c), yc); else ctx.lineTo(xAt(c), yc) }
+                ctx.stroke()
+                ctx.setLineDash([])
+
+                // RAM: filled area under a solid line.
+                ctx.beginPath()
+                ctx.moveTo(xAt(0), h)
+                for (var i = 0; i < n; i++) ctx.lineTo(xAt(i), yAt(pts[i].mem))
+                ctx.lineTo(xAt(n - 1), h)
+                ctx.closePath()
+                ctx.fillStyle = Qt.alpha(ink, 0.10)
+                ctx.fill()
+                ctx.beginPath()
+                for (var j = 0; j < n; j++) { var y = yAt(pts[j].mem); if (j === 0) ctx.moveTo(xAt(j), y); else ctx.lineTo(xAt(j), y) }
+                ctx.strokeStyle = Qt.alpha(ink, 0.8)
+                ctx.lineWidth = 1.5
+                ctx.stroke()
+
+                // Now.
+                ctx.fillStyle = root.tight ? root.urgentColor : ink
+                ctx.beginPath(); ctx.arc(xAt(n - 1), yAt(pts[n - 1].mem), 2.2, 0, Math.PI * 2); ctx.fill()
+              }
             }
 
-            Row {
-              anchors.fill: parent
-              spacing: 1
+            Column {
+              id: sparkCaption
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(1)
 
-              Repeater {
-                model: shareBar.shown
-
-                Rectangle {
-                  required property int index
-                  readonly property var app: root.apps[index]
-                  readonly property bool hot: root.cursor >= 0 && root.cursor < root.rows.length && root.rows[root.cursor].key === app.key
-                  height: parent.height
-                  width: Math.max(0, Math.round(shareBar.width * Model.share(app.mem, shareBar.total)) - 1)
-                  radius: index === 0 ? height / 2 : 0
-                  color: hot ? (bar ? bar.urgent : Color.accent) : Qt.alpha(root.contentForeground, shareBar.alphas[index])
-
-                  Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
-                  Behavior on color { ColorAnimation { duration: 160 } }
-                }
+              Text {
+                anchors.right: parent.right
+                textFormat: Text.PlainText
+                text: Model.historyTrend(root.history)
+                color: root.dim
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.caption
               }
-
-              Rectangle {
-                readonly property real rest: {
-                  var s = 0
-                  for (var i = shareBar.shown; i < root.apps.length; i++) s += root.apps[i].mem
-                  return s
-                }
-                height: parent.height
-                width: Math.max(0, Math.round(shareBar.width * Model.share(rest, shareBar.total)))
-                color: Qt.alpha(root.contentForeground, 0.14)
-                Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+              Text {
+                anchors.right: parent.right
+                textFormat: Text.PlainText
+                text: Model.historySpan(root.history)
+                color: Qt.alpha(root.dim, 0.7)
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.caption
               }
             }
           }
 
           PanelSeparator { foreground: root.contentForeground }
 
-          // ---------- Rows ----------
-          Column {
-            id: list
+          // ---------- Tanks beside the rows ----------
+          Item {
             width: parent.width
-            spacing: Style.space(2)
+            implicitHeight: Math.max(list.implicitHeight, Style.space(120)) + Style.space(18)
 
-            Repeater {
-              model: root.rows
+            Row {
+              id: tanks
+              anchors.left: parent.left
+              anchors.top: parent.top
+              height: list.implicitHeight
+              spacing: Style.space(6)
 
-              Item {
-                id: rowItem
-                required property var modelData
-                required property int index
-                readonly property var row: modelData
-                readonly property bool hot: root.cursor === index
-                readonly property bool isNote: row.type === "note"
-                readonly property bool isMore: false
-                readonly property string status: root.rowStatus(row)
-                readonly property real memShare: root.snapshot && root.snapshot.mem ? Model.share(row.mem, root.snapshot.mem.used) : 0
-                readonly property bool showClose: row.closable && (hot || closeMouse.containsMouse)
+              Tank { width: Style.space(18); height: parent.height; segments: root.memSegments; label: "RAM" }
+              Tank { width: Style.space(18); height: parent.height; segments: root.cpuSegments; label: "CPU" }
+            }
 
-                width: parent.width
-                height: isNote ? Style.space(24) : Style.spacing.popupRowHeight + Style.space(4)
+            Column {
+              id: list
+              anchors.left: tanks.right
+              anchors.leftMargin: Style.space(14)
+              anchors.right: parent.right
+              anchors.top: parent.top
+              spacing: Style.space(2)
 
-                Rectangle {
-                  anchors.fill: parent
-                  radius: Style.cornerRadius
-                  color: rowItem.hot ? Style.hoverFill : "transparent"
-                }
+              Repeater {
+                model: root.rows
 
-                // The row's own share of used memory, as a faint fill from the
-                // left. Sorted rows make it a bar chart without axes.
-                Rectangle {
-                  visible: !rowItem.isNote && !rowItem.isMore
-                  anchors.left: parent.left
-                  anchors.leftMargin: rowItem.row.depth * Style.space(16)
-                  anchors.verticalCenter: parent.verticalCenter
-                  height: parent.height - Style.space(6)
-                  width: Math.max(0, Math.round((parent.width - anchors.leftMargin) * rowItem.memShare))
-                  radius: Style.cornerRadius
-                  color: Qt.alpha(root.contentForeground, rowItem.row.depth > 0 ? 0.04 : 0.07)
-                  Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
-                }
+                Item {
+                  id: rowItem
+                  required property var modelData
+                  required property int index
+                  readonly property var row: modelData
+                  readonly property bool hot: root.cursor === index
+                  readonly property bool isNote: row.type === "note"
+                  readonly property string status: root.rowStatus(row)
+                  readonly property bool showClose: row.closable && (hot || closeMouse.containsMouse)
 
-                MouseArea {
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: rowItem.isNote ? Qt.ArrowCursor : Qt.PointingHandCursor
-                  // Rows are rebuilt on every sample, and a fresh MouseArea
-                  // under a resting pointer fires entered(): only a pointer
-                  // that actually moves may take the cursor from the keys.
-                  onPositionChanged: if (root.cursor !== rowItem.index) root.setCursor(rowItem.index)
-                  onClicked: root.activate(rowItem.row)
-                }
+                  width: parent.width
+                  height: isNote ? Style.space(22) : Style.spacing.popupRowHeight + Style.space(2)
 
-                Row {
-                  anchors.left: parent.left
-                  anchors.leftMargin: Style.space(8) + rowItem.row.depth * Style.space(16)
-                  anchors.right: metrics.left
-                  anchors.rightMargin: Style.space(10)
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(8)
-
-                  Text {
-                    visible: rowItem.row.expandable
-                    textFormat: Text.PlainText
-                    text: rowItem.row.expanded ? "" : ""
-                    color: root.dim
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.caption
-                    anchors.verticalCenter: parent.verticalCenter
+                  Rectangle {
+                    anchors.fill: parent
+                    radius: Style.cornerRadius
+                    color: rowItem.hot ? Style.hoverFill : "transparent"
                   }
 
-                  Text {
-                    textFormat: Text.PlainText
-                    text: rowItem.row.name
-                    color: rowItem.isNote || rowItem.isMore ? root.dim : root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: rowItem.isNote ? Style.font.caption : Style.font.body
-                    font.italic: rowItem.isNote
-                    anchors.verticalCenter: parent.verticalCenter
-                    elide: Text.ElideRight
-                    width: Math.min(implicitWidth, parent.width - (subtitle.visible ? Style.space(60) : 0))
+                  MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: rowItem.isNote ? Qt.ArrowCursor : Qt.PointingHandCursor
+                    // Rows are rebuilt on every sample, and a fresh MouseArea
+                    // under a resting pointer fires entered(): only a pointer
+                    // that actually moves may take the cursor from the keys.
+                    onPositionChanged: if (root.cursor !== rowItem.index) root.setCursor(rowItem.index)
+                    onClicked: root.activate(rowItem.row)
                   }
 
-                  Text {
-                    id: subtitle
-                    visible: text !== ""
-                    textFormat: Text.PlainText
-                    text: rowItem.status !== "" ? rowItem.status : rowItem.row.subtitle
-                    color: rowItem.status !== "" && root.stillRunning(rowItem.row) ? root.urgentColor : root.dim
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.caption
+                  Row {
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.space(6) + rowItem.row.depth * Style.space(14)
+                    anchors.right: metrics.left
+                    anchors.rightMargin: Style.space(8)
                     anchors.verticalCenter: parent.verticalCenter
-                    elide: Text.ElideRight
-                    width: Math.max(0, parent.width - x)
-                  }
-                }
-
-                Row {
-                  id: metrics
-                  anchors.right: parent.right
-                  anchors.rightMargin: Style.space(6)
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(10)
-
-                  Text {
-                    visible: !rowItem.isNote && !rowItem.isMore
-                    textFormat: Text.PlainText
-                    text: Model.fmtCpu(rowItem.row.cpu)
-                    color: rowItem.row.cpu >= 50 ? root.contentForeground : root.dim
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.caption
-                    anchors.verticalCenter: parent.verticalCenter
-                    horizontalAlignment: Text.AlignRight
-                    width: Style.space(34)
-                  }
-
-                  Text {
-                    visible: !rowItem.isNote
-                    textFormat: Text.PlainText
-                    text: Model.fmtMem(rowItem.row.mem)
-                    color: rowItem.isMore ? root.dim : root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    anchors.verticalCenter: parent.verticalCenter
-                    horizontalAlignment: Text.AlignRight
-                    width: Style.space(58)
-                  }
-
-                  // Close lives at the end of the row and only shows itself
-                  // on the row under the cursor: the panel reads as a
-                  // report until you reach for it.
-                  Item {
-                    width: Style.space(22)
-                    height: Style.space(22)
-                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(7)
 
                     Text {
-                      anchors.centerIn: parent
+                      visible: rowItem.row.expandable
                       textFormat: Text.PlainText
-                      text: "×"
-                      visible: rowItem.showClose
-                      color: closeMouse.containsMouse ? root.urgentColor : root.dim
+                      text: rowItem.row.expanded ? "" : ""
+                      color: root.dim
                       font.family: root.contentFontFamily
-                      font.pixelSize: Style.font.title
+                      font.pixelSize: Style.font.caption
+                      anchors.verticalCenter: parent.verticalCenter
                     }
 
-                    MouseArea {
-                      id: closeMouse
-                      anchors.fill: parent
-                      hoverEnabled: true
-                      enabled: rowItem.row.closable
-                      cursorShape: Qt.PointingHandCursor
-                      onPositionChanged: if (root.cursor !== rowItem.index) root.setCursor(rowItem.index)
-                      onClicked: root.requestClose(rowItem.row)
+                    Text {
+                      textFormat: Text.PlainText
+                      text: rowItem.row.name
+                      color: rowItem.isNote ? root.dim : root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: rowItem.isNote ? Style.font.caption : Style.font.body
+                      font.italic: rowItem.isNote
+                      anchors.verticalCenter: parent.verticalCenter
+                      elide: Text.ElideRight
+                      width: Math.min(implicitWidth, parent.width - (subtitle.visible ? Style.space(50) : 0))
+                    }
+
+                    Text {
+                      id: subtitle
+                      visible: text !== ""
+                      textFormat: Text.PlainText
+                      text: rowItem.status !== "" ? rowItem.status : rowItem.row.subtitle
+                      color: rowItem.status !== "" && root.stillRunning(rowItem.row) ? root.urgentColor
+                        : rowItem.row.omarchy ? Qt.alpha(root.hotColor, 0.85) : root.dim
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.caption
+                      anchors.verticalCenter: parent.verticalCenter
+                      elide: Text.ElideRight
+                      width: Math.max(0, parent.width - x)
+                    }
+                  }
+
+                  Row {
+                    id: metrics
+                    anchors.right: parent.right
+                    anchors.rightMargin: Style.space(4)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(8)
+
+                    Text {
+                      visible: !rowItem.isNote
+                      textFormat: Text.PlainText
+                      text: Model.fmtCpu(rowItem.row.cpu)
+                      color: rowItem.row.cpu >= 50 ? root.contentForeground : root.dim
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.caption
+                      anchors.verticalCenter: parent.verticalCenter
+                      horizontalAlignment: Text.AlignRight
+                      width: Style.space(34)
+                    }
+
+                    Text {
+                      visible: !rowItem.isNote
+                      textFormat: Text.PlainText
+                      text: Model.fmtMem(rowItem.row.mem)
+                      color: root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      anchors.verticalCenter: parent.verticalCenter
+                      horizontalAlignment: Text.AlignRight
+                      width: Style.space(56)
+                    }
+
+                    // Close lives at the end of the row and only shows itself
+                    // on the row under the cursor: the panel reads as a
+                    // report until you reach for it.
+                    Item {
+                      width: Style.space(20)
+                      height: Style.space(20)
+                      anchors.verticalCenter: parent.verticalCenter
+
+                      Text {
+                        anchors.centerIn: parent
+                        textFormat: Text.PlainText
+                        text: "×"
+                        visible: rowItem.showClose
+                        color: closeMouse.containsMouse ? root.urgentColor : root.dim
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.title
+                      }
+
+                      MouseArea {
+                        id: closeMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: rowItem.row.closable
+                        cursorShape: Qt.PointingHandCursor
+                        onPositionChanged: if (root.cursor !== rowItem.index) root.setCursor(rowItem.index)
+                        onClicked: root.requestClose(rowItem.row)
+                      }
                     }
                   }
                 }
@@ -587,7 +693,7 @@ Panel {
           // ---------- Keys ----------
           Text {
             textFormat: Text.PlainText
-            text: "j k move · enter open · x close · b btop"
+            text: "j k move · l h open close · x close · b btop"
             color: Qt.alpha(root.dim, 0.7)
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption

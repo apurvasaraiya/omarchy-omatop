@@ -11,23 +11,26 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
 
 ## What you see
 
-- **Bar:** a glyph with a one-pixel mark under it. The mark's fill is the
-  share of RAM in use. The glyph has four states from the cheap sample it
-  takes every twenty seconds: dimmed when calm, full strength when busy
-  (RAM over 75% or load over half the cores), a processor glyph when the CPU
-  is what is saturated, and the urgent colour with a slow breath when memory
-  is nearly gone. Hover reads the numbers. Middle click posts them as a
-  notification. Right click opens btop.
+- **Bar:** the icon is a small tank. Its fill is the share of RAM in use,
+  from a cheap sample every twenty seconds. Calm machines draw it quietly,
+  busy ones (RAM over 75% or load over half the cores) at full strength, and
+  when the CPU is saturated or memory is nearly gone it takes the bar's
+  active colour and breathes slowly. Hover reads the numbers. Middle click
+  posts them as a notification. Right click opens btop.
 - **Panel (left click):** one sentence up top, for example
-  "Chromium holds 3.4 GB, mostly cursor.com", the totals beneath it, and a
-  stacked bar of the biggest apps so the shares can be compared without
-  reading. Then the ten heaviest apps: name, window title or process count,
-  CPU, memory. Each row's own share is painted faintly behind it. There is
-  no "and n more"; what does not make the top ten is not what is slowing
-  the machine.
+  "Chromium holds 3.4 GB, mostly cursor.com", or when memory is tight,
+  "Tight. Closing cursor.com frees 1.7 GB". Under it a sparkline of RAM for
+  the last half hour with CPU dotted behind it and a one-word trend. Then
+  two tanks, RAM and CPU, beside the ten heaviest apps. Each tank segment
+  is a row, heaviest at the bottom in both, so the same app sits at the same
+  height in each. Hover a segment or a row and both light up in the accent
+  and the hero's second line reads that row out: memory, share of RAM, CPU,
+  how long it has been alive. There is no "and n more"; what does not make
+  the top ten is not what is slowing the machine.
 - **Browser rows** are collapsed until you open them, then show the five
   heaviest pages and one row for the browser itself (extensions, GPU,
-  network, background pages). A page row is one origin across all its tabs
+  network, background pages), and the browser's tank segment splits into
+  its pages with it. A page row is one origin across all its tabs
   and windows. Pages that Omarchy installed as web apps are named after the
   app and tagged "Omarchy app", so YouTube, WhatsApp and friends read apart
   from whatever else you have open.
@@ -38,8 +41,9 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
   offers a force kill. The shell, Hyprland and the session plumbing are
   listed but never offered.
 
-Keys: `j` `k` move, `Enter` or `l`/`h` open and close a browser row, `x`
-close, `r` resample, `b` btop, `Esc` dismiss.
+Keys: `j` `k` move, `Enter` or `l`/`h` open and close a browser row (`h` on a
+page folds it back to the browser), `x` close, `r` resample, `b` btop, `Esc`
+dismiss.
 
 ## How it knows which site is which
 

@@ -5,10 +5,11 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// The bar end of Omatop: a memory glyph with a mark under it that fills as
-// RAM fills. Left click opens the breakdown, middle click reads the whole
-// picture aloud as a notification, right click opens btop for the people who
-// want every process after all.
+// The bar end of Omatop. The icon is a small tank: its fill is the share of
+// RAM in use, and it takes the bar's active colour when the CPU is
+// saturated or memory is nearly gone. There is no glyph and no separate
+// mark; the gauge is the icon. Left click opens the breakdown, middle click
+// posts the numbers as a notification, right click opens btop.
 BarWidget {
   id: root
   moduleName: "apurva.omatop"
@@ -17,13 +18,16 @@ BarWidget {
   // takes the cheap memory reading between openings.
   property var snapshot: null
   readonly property real usedFraction: Model.usedFraction(snapshot)
-  readonly property bool tight: Model.isTight(snapshot)
-
-  // calm: dimmed memory glyph. busy: full strength. cpu: the glyph becomes
-  // a processor because that is what is saturated. hot: urgent colour and a
-  // slow breath, the one animation in the widget.
+  readonly property real cpuFraction: Math.min(1, Model.loadFraction(snapshot))
   readonly property string state: Model.barState(snapshot)
   readonly property bool hot: state === "hot"
+  readonly property bool cpuHot: state === "cpu"
+
+  // One point every twenty seconds, half an hour deep, for the panel's
+  // sparkline. Kept here so it survives the panel closing.
+  property var history: []
+
+  onSnapshotChanged: history = Model.pushHistory(history, snapshot, Date.now())
 
   readonly property string scriptPath: String(Qt.resolvedUrl("omatop")).replace(/^file:\/\//, "")
 
@@ -90,8 +94,9 @@ BarWidget {
     }
   }
 
-  // Between openings only /proc/meminfo is read: one short process every
-  // twenty seconds, nothing per-process, nothing near the browser.
+  // Between openings only /proc/meminfo and the load average are read: one
+  // short process every twenty seconds, nothing per-process, nothing near
+  // the browser.
   Process {
     id: lightProc
     command: ["python3", root.scriptPath, "watch", "--light", "--once"]
@@ -128,46 +133,64 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: Model.barGlyph(root.state)
-    active: root.hot
-    dimmed: root.state === "calm"
+    active: root.hot || root.cpuHot
     tooltipText: Model.barTooltip(root.snapshot)
 
-    SequentialAnimation on opacity {
-      running: root.hot
-      loops: Animation.Infinite
-      alwaysRunToEnd: true
-      NumberAnimation { from: 1.0; to: 0.45; duration: 1400; easing.type: Easing.InOutSine }
-      NumberAnimation { from: 0.45; to: 1.0; duration: 1400; easing.type: Easing.InOutSine }
+    // The tank. Outline at the glyph's weight, fill rising from the bottom
+    // with the share of RAM in use. A calm machine draws it quietly; a busy
+    // one at full strength; a saturated CPU or tight memory in the active
+    // colour, breathing slowly, the widget's one animation.
+    iconComponent: Component {
+      Item {
+        id: tank
+        readonly property color ink: button.active && button.useActiveColor ? button.activeColor : button.foreground
+        readonly property real tankWidth: Math.round(width * 0.5)
+        readonly property real tankHeight: Math.round(height * 0.92)
+        opacity: root.state === "calm" ? 0.7 : 1
+
+        Behavior on opacity { NumberAnimation { duration: 400 } }
+
+        Rectangle {
+          id: shell
+          anchors.centerIn: parent
+          width: tank.tankWidth
+          height: tank.tankHeight
+          radius: width / 2
+          color: "transparent"
+          border.width: 1
+          border.color: tank.ink
+          clip: true
+
+          Behavior on border.color { ColorAnimation { duration: 300 } }
+
+          Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.margins: 1
+            height: Math.max(0, Math.round((parent.height - 2) * root.usedFraction))
+            radius: (parent.width - 2) / 2
+            color: tank.ink
+
+            Behavior on height { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
+            Behavior on color { ColorAnimation { duration: 300 } }
+
+            SequentialAnimation on opacity {
+              running: root.hot || root.cpuHot
+              loops: Animation.Infinite
+              alwaysRunToEnd: true
+              NumberAnimation { from: 1.0; to: 0.4; duration: 1400; easing.type: Easing.InOutSine }
+              NumberAnimation { from: 0.4; to: 1.0; duration: 1400; easing.type: Easing.InOutSine }
+            }
+          }
+        }
+      }
     }
 
     onPressed: function(b) {
       if (b === Qt.RightButton) { if (root.bar) root.bar.run("omarchy-launch-tui btop") }
       else if (b === Qt.MiddleButton) { if (root.bar) root.bar.run("omarchy-notification-send \"" + Model.barTooltip(root.snapshot).replace(/"/g, "") + "\"") }
       else root.togglePanel()
-    }
-
-    // The mark under the glyph is the memory gauge: its fill is the share of
-    // RAM in use. Hidden while the panel is open, where the bar's own
-    // open-panel rule takes the same spot.
-    Rectangle {
-      visible: !root.vertical && !root.opened && root.snapshot !== null
-      anchors.horizontalCenter: parent.horizontalCenter
-      anchors.bottom: parent.bottom
-      anchors.bottomMargin: 2
-      width: root.openPanelIndicatorWidth
-      height: 1
-      color: Qt.alpha(button.foreground, 0.25)
-
-      Rectangle {
-        anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
-        width: Math.max(1, Math.round(parent.width * root.usedFraction))
-        height: root.hot ? 2 : 1
-        color: root.hot || root.state === "cpu" ? button.activeColor : button.foreground
-
-        Behavior on width { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
-      }
     }
   }
 }
