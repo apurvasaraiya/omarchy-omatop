@@ -464,13 +464,7 @@ function tankSegments(snapshot, rows, which) {
   if (focused) total = Math.max(1, Number(rows[0][which]) || 0)
   else if (which === "cpu") total = (Number(snapshot.ncpu) || 1) * 100
   else if (which === "gpu") total = 100
-  else if (which === "disk") {
-    // Per-process counts and the block layer disagree a little (caches,
-    // buffering), so the gauge is whichever is larger; never over-full.
-    var sum = 0
-    for (var d = 0; d < rows.length; d++) if (rows[d].type !== "note" && rows[d].type !== "header") sum += Number(rows[d].disk) || 0
-    total = Math.max(Number(snapshot.disk) || 0, sum, 1)
-  }
+  else if (which === "disk") total = DISK_SCALE
   else total = snapshot.mem.total
   var accounted = 0
   var rank = -1
@@ -489,11 +483,24 @@ function tankSegments(snapshot, rows, which) {
   if (focused) used = total
   else if (which === "cpu") used = Math.min(total, (Number(snapshot.load[0]) || 0) * 100)
   else if (which === "gpu") used = Math.min(100, Number(snapshot.gpu) || 0)
-  else if (which === "disk") used = Number(snapshot.disk) || 0
+  else if (which === "disk") used = Math.min(total, diskActivity(snapshot, rows))
   else used = snapshot.mem.used
   var rest = used - accounted
   if (rest > total * 0.005) out.push({ key: "rest", parentKey: "", frac: share(rest, total), depth: 0, rank: 99 })
   return stackSegments(out)
+}
+
+// Disk is gauged against a fixed 20 MB/s, the range where a laptop SSD
+// under ordinary use lives, so a full gauge means busy rather than "the
+// most of whatever happened this second". Per-process counters and the
+// block layer disagree a little (writes are counted when buffered, not
+// when flushed), so activity is whichever of the two is larger.
+var DISK_SCALE = 20 * 1024 * 1024
+
+function diskActivity(snapshot, rows) {
+  var sum = 0
+  if (rows) for (var d = 0; d < rows.length; d++) if (rows[d].type !== "note" && rows[d].type !== "header") sum += Number(rows[d].disk) || 0
+  return Math.max(Number(snapshot && snapshot.disk) || 0, sum)
 }
 
 // ---- Morphing between two stacked layouts. Keys present on both sides
@@ -654,7 +661,7 @@ function railCaption(snapshot, which, rows) {
   if (which === "mem") return fmtMem(snapshot.mem.used) + " of " + fmtMem(snapshot.mem.total)
   if (which === "cpu") return Math.round(Math.min(1, loadFraction(snapshot)) * 100) + "%"
   if (which === "gpu") return Math.round(Number(snapshot.gpu) || 0) + "%"
-  if (which === "disk") return fmtRate(snapshot.disk)
+  if (which === "disk") return fmtRate(diskActivity(snapshot, rows))
   if (which === "net" && snapshot.net) return "↓ " + fmtRate(snapshot.net.down) + "  ↑ " + fmtRate(snapshot.net.up)
   return ""
 }
