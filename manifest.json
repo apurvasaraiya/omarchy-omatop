@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "apurva.omatop",
+  "name": "Omatop",
+  "version": "1.0.0",
+  "author": "Apurva Saraiya",
+  "description": "Who is eating the laptop: memory and CPU by app, and by site inside Chromium, with a confirmed close from the row",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omatop",
+    "description": "Memory pressure mark in the bar; click for the app and site breakdown",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "card": false
+    }
+  }
+}
