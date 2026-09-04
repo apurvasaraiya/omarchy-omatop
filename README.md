@@ -37,7 +37,10 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
   itself (extensions, GPU, network, background pages). The tanks become the
   browser: its pages fill them, scaled to the browser's own total. Enter or
   a click on a page brings that tab, or web-app window, to the front. `h`,
-  Esc or the header row go back. A page row is one origin across all its tabs
+  Esc or the header row go back. A page row is one origin across all its
+  tabs and windows. Pages Omarchy installed as web apps are named after the
+  app, carry its icon and are tagged "Omarchy app", so YouTube, WhatsApp and
+  friends read apart from whatever else you have open.
 - **Closing:** the × on the row under the cursor, or the `x` key. One
   confirmation, which names what closes and roughly what it frees. Sites are
   closed through DevTools, so the tab goes away cleanly. Apps get SIGTERM;
