@@ -4,18 +4,24 @@
 Subcommands
   watch [--interval S] [--light]   stream one JSON snapshot per line
   close-site --targets ID,ID       close Chromium tabs/windows via DevTools
+  activate-site --target ID        bring that tab or web-app window to front
+  focus-app --pids PID,PID         focus the Hyprland window of any of these pids
   kill --pids PID,PID [--force]    SIGTERM (or SIGKILL) a process group
 
 Standard library only. The Chromium DevTools client below speaks the
 websocket protocol by hand so the plugin has no dependencies to install.
 """
+import atexit
 import base64
 import json
 import os
 import re
+import shutil
 import signal
 import socket
+import sqlite3
 import struct
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -476,7 +482,7 @@ class SiteResolver:
 
 
 def omarchy_webapps():
-    """host -> app name, from the launchers Omarchy writes for web apps."""
+    """host -> {name, icon}, from the launchers Omarchy writes for web apps."""
     apps = {}
     d = os.path.join(HOME, ".local", "share", "applications")
     try:
@@ -491,16 +497,97 @@ def omarchy_webapps():
             continue
         name = ""
         url = ""
+        icon = ""
         for line in txt.splitlines():
             if line.startswith("Name=") and not name:
                 name = line[5:].strip()
+            elif line.startswith("Icon=") and not icon:
+                icon = line[5:].strip()
             elif line.startswith("Exec=") and "omarchy-launch-webapp" in line:
                 m = re.search(r"omarchy-launch-webapp\s+\"?(\S+?)\"?(\s|$)", line)
                 if m:
                     url = m.group(1)
         if name and url:
-            apps[host_of(url)] = name
+            apps[host_of(url)] = {"name": name, "icon": icon}
     return apps
+
+
+# ------------------------------------------------------------ favicons ----
+
+ICON_DIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "omatop-%d" % UID, "icons")
+
+
+class FaviconStore:
+    """Site icons out of Chromium's own favicon database.
+
+    The database is locked while the browser runs, so a copy is taken (a
+    few MB, at most every five minutes) and queried read-only. Icons land
+    as PNG files under the runtime dir, one per host, for the panel to show.
+    """
+
+    def __init__(self, profile_dir):
+        self.profile_dir = profile_dir
+        self.cache = {}
+        self.copy = None
+        self.copied_at = 0.0
+
+    def icon_for(self, host, urls):
+        if host in self.cache:
+            return self.cache[host]
+        path = ""
+        try:
+            path = self._extract(host, urls)
+        except (OSError, sqlite3.Error):
+            path = ""
+        self.cache[host] = path
+        return path
+
+    def _database(self):
+        src = os.path.join(self.profile_dir, "Default", "Favicons")
+        if not os.path.isfile(src):
+            return None
+        if self.copy is None or time.monotonic() - self.copied_at > 300:
+            os.makedirs(ICON_DIR, 0o700, exist_ok=True)
+            dst = os.path.join(ICON_DIR, "favicons.%d.sqlite" % os.getpid())
+            shutil.copyfile(src, dst)
+            self.copy = dst
+            self.copied_at = time.monotonic()
+            self.cache = {}
+            atexit.register(lambda: _quiet_remove(dst))
+        return self.copy
+
+    def _extract(self, host, urls):
+        db = self._database()
+        if not db:
+            return ""
+        out = os.path.join(ICON_DIR, "%s.png" % re.sub(r"[^A-Za-z0-9.-]", "_", host))
+        conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+        try:
+            patterns = list(urls) + ["https://%s/%%" % host, "https://www.%s/%%" % host, "http://%s/%%" % host]
+            for pattern in patterns:
+                rows = conn.execute(
+                    "select fb.image_data, fb.width from icon_mapping im "
+                    "join favicon_bitmaps fb on fb.icon_id = im.icon_id "
+                    "where im.page_url like ? order by fb.width desc limit 6", (pattern,)).fetchall()
+                if not rows:
+                    continue
+                small = [r for r in rows if r[1] and r[1] <= 64]
+                data = (small[0] if small else rows[-1])[0]
+                if not data:
+                    continue
+                with open(out, "wb") as f:
+                    f.write(data)
+                return out
+        finally:
+            conn.close()
+        return ""
+
+
+def _quiet_remove(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def browser_profile_dir(root_cmd):
@@ -532,6 +619,7 @@ class Sampler:
     def __init__(self):
         self.prev = {}       # pid -> (cpu ticks, monotonic time)
         self.resolvers = {}  # profile dir -> SiteResolver
+        self.favicons = {}   # profile dir -> FaviconStore
         self.pss_budget = 32
         self.order = []      # row keys in last-published order, for stable sorting
         self.webapps = omarchy_webapps()
@@ -640,6 +728,9 @@ class Sampler:
             resolver = self.resolvers[profile] = SiteResolver(profile)
         renderers = {pid for pid, k in kinds.items() if k == "renderer"}
         by_host = resolver.sites(renderers)
+        favicons = self.favicons.get(profile)
+        if favicons is None:
+            favicons = self.favicons[profile] = FaviconStore(profile)
 
         if time.monotonic() - self.webapps_read > 60:
             self.webapps = omarchy_webapps()
@@ -650,13 +741,17 @@ class Sampler:
         for host, site in by_host.items():
             pids = sorted(p for p in site["pids"] if p in renderers)
             claimed.update(pids)
-            app_name = self.webapps.get(host, "")
+            webapp = self.webapps.get(host)
+            app_name = webapp["name"] if webapp else ""
+            urls = [resolver.cache[t]["url"] for t in site["targets"] if t in resolver.cache]
             rows.append({
                 "key": "site:%s" % host,
                 "kind": "site",
                 "name": host,
                 "app": app_name,
                 "omarchy": bool(app_name),
+                "iconName": webapp["icon"] if webapp else "",
+                "icon": favicons.icon_for(host, urls),
                 "title": site["titles"][0] if site["titles"] else "",
                 "tabs": len(site["targets"]),
                 "targets": site["targets"],
@@ -762,6 +857,82 @@ def cmd_close_site(args):
     return 1 if failed else 0
 
 
+def hypr_clients():
+    try:
+        out = subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True, timeout=1.5).stdout
+        return json.loads(out or "[]")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return []
+
+
+def hypr_focus(address):
+    subprocess.run(["hyprctl", "dispatch", "focuswindow", "address:%s" % address],
+                   capture_output=True, timeout=1.5)
+
+
+def cmd_activate_site(args):
+    target = ""
+    profile = os.path.join(HOME, ".config", "chromium")
+    i = 0
+    while i < len(args):
+        if args[i] == "--target" and i + 1 < len(args):
+            target = args[i + 1]
+            i += 2
+        elif args[i] == "--profile" and i + 1 < len(args):
+            profile = args[i + 1]
+            i += 2
+        else:
+            i += 1
+    endpoint = read_devtools_endpoint(profile)
+    if not endpoint or not target:
+        return 2
+    dt = DevTools(endpoint)
+    title = ""
+    try:
+        for t in dt.call("Target.getTargets").get("targetInfos", []):
+            if t.get("targetId") == target:
+                title = t.get("title", "")
+        dt.call("Target.activateTarget", {"targetId": target})
+    except (RuntimeError, TimeoutError, ConnectionError):
+        return 1
+    finally:
+        dt.close()
+    # The tab is now in front inside its window; bring that window to front.
+    # Chromium titles its windows "<tab title> - Chromium", web-app windows
+    # just "<tab title>", so a prefix match finds either.
+    time.sleep(0.15)
+    chosen = None
+    for c in hypr_clients():
+        ct = c.get("title") or ""
+        if title and ct.startswith(title):
+            chosen = c
+            break
+    if chosen is None:
+        for c in hypr_clients():
+            if (c.get("class") or "").lower() in ("chromium", "chromium-browser", "google-chrome", "brave-browser", "helium"):
+                chosen = c
+                break
+    if chosen is not None:
+        hypr_focus(chosen.get("address"))
+    return 0
+
+
+def cmd_focus_app(args):
+    pids = set()
+    i = 0
+    while i < len(args):
+        if args[i] == "--pids" and i + 1 < len(args):
+            pids = {int(p) for p in args[i + 1].split(",") if p.strip().isdigit()}
+            i += 2
+        else:
+            i += 1
+    for c in hypr_clients():
+        if c.get("pid") in pids and c.get("mapped", True):
+            hypr_focus(c.get("address"))
+            return 0
+    return 3
+
+
 def cmd_kill(args):
     pids = []
     force = False
@@ -802,6 +973,10 @@ def main(argv):
         return cmd_watch(rest)
     if cmd == "close-site":
         return cmd_close_site(rest)
+    if cmd == "activate-site":
+        return cmd_activate_site(rest)
+    if cmd == "focus-app":
+        return cmd_focus_app(rest)
     if cmd == "kill":
         return cmd_kill(rest)
     print("unknown command: %s" % cmd, file=sys.stderr)

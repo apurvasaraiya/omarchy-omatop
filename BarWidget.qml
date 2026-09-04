@@ -27,6 +27,9 @@ BarWidget {
   // sparkline. Kept here so it survives the panel closing.
   property var history: []
 
+  // Bumped on every press; the tank sloshes in answer.
+  property int pressSerial: 0
+
   onSnapshotChanged: history = Model.pushHistory(history, snapshot, Date.now())
 
   readonly property string scriptPath: String(Qt.resolvedUrl("omatop")).replace(/^file:\/\//, "")
@@ -139,7 +142,8 @@ BarWidget {
     // The tank. Outline at the glyph's weight, fill rising from the bottom
     // with the share of RAM in use. A calm machine draws it quietly; a busy
     // one at full strength; a saturated CPU or tight memory in the active
-    // colour, breathing slowly, the widget's one animation.
+    // colour, breathing slowly. A press squashes it and the liquid settles
+    // back: the one flourish, and it answers the hand.
     iconComponent: Component {
       Item {
         id: tank
@@ -147,8 +151,21 @@ BarWidget {
         readonly property real tankWidth: Math.round(width * 0.5)
         readonly property real tankHeight: Math.round(height * 0.92)
         opacity: root.state === "calm" ? 0.7 : 1
+        transformOrigin: Item.Bottom
 
         Behavior on opacity { NumberAnimation { duration: 400 } }
+
+        Connections {
+          target: root
+          function onPressSerialChanged() { slosh.restart() }
+        }
+
+        SequentialAnimation {
+          id: slosh
+          NumberAnimation { target: tank; property: "scale"; to: 0.82; duration: 90; easing.type: Easing.OutQuad }
+          NumberAnimation { target: tank; property: "scale"; to: 1.1; duration: 140; easing.type: Easing.OutQuad }
+          NumberAnimation { target: tank; property: "scale"; to: 1.0; duration: 220; easing.type: Easing.OutBack }
+        }
 
         Rectangle {
           id: shell
@@ -188,6 +205,7 @@ BarWidget {
     }
 
     onPressed: function(b) {
+      root.pressSerial++
       if (b === Qt.RightButton) { if (root.bar) root.bar.run("omarchy-launch-tui btop") }
       else if (b === Qt.MiddleButton) { if (root.bar) root.bar.run("omarchy-notification-send \"" + Model.barTooltip(root.snapshot).replace(/"/g, "") + "\"") }
       else root.togglePanel()

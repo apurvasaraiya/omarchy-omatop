@@ -15,25 +15,29 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
   from a cheap sample every twenty seconds. Calm machines draw it quietly,
   busy ones (RAM over 75% or load over half the cores) at full strength, and
   when the CPU is saturated or memory is nearly gone it takes the bar's
-  active colour and breathes slowly. Hover reads the numbers. Middle click
-  posts them as a notification. Right click opens btop.
+  active colour and breathes slowly. A click squashes it and the liquid
+  settles back. Hover shows "CPU 45% · RAM 9.5 GB" and nothing else. Middle
+  click posts that as a notification. Right click opens btop.
 - **Panel (left click):** one sentence up top, for example
   "Chromium holds 3.4 GB, mostly cursor.com", or when memory is tight,
   "Tight. Closing cursor.com frees 1.7 GB". Under it a sparkline of RAM for
   the last half hour with CPU dotted behind it and a one-word trend. Then
-  two tanks, RAM and CPU, beside the ten heaviest apps. Each tank segment
-  is a row, heaviest at the bottom in both, so the same app sits at the same
-  height in each. Hover a segment or a row and both light up in the accent
-  and the hero's second line reads that row out: memory, share of RAM, CPU,
-  how long it has been alive. There is no "and n more"; what does not make
-  the top ten is not what is slowing the machine.
-- **Browser rows** are collapsed until you open them, then show the five
-  heaviest pages and one row for the browser itself (extensions, GPU,
-  network, background pages), and the browser's tank segment splits into
-  its pages with it. A page row is one origin across all its tabs
-  and windows. Pages that Omarchy installed as web apps are named after the
-  app and tagged "Omarchy app", so YouTube, WhatsApp and friends read apart
-  from whatever else you have open.
+  two tanks, RAM and CPU, beside the ten heaviest apps, each with its icon.
+  Each tank segment is a row, heaviest at the bottom in both, so the same
+  app sits at the same height in each. Hover a segment or a row and the
+  tanks dim to that one segment, lit in the accent, with a line drawn from
+  it to the row. Segments and rows slide to their new places when a sample
+  changes the order. There is no "and n more"; what does not make the top
+  ten is not what is slowing the machine.
+- **Enter or a click** on an app brings its window to the front (btop if it
+  has none). On a browser it drills into a view of only that browser's
+  pages.
+- **The browser view** lists every page the browser holds, with its
+  favicon straight out of Chromium's own cache, and one row for the browser
+  itself (extensions, GPU, network, background pages). The tanks become the
+  browser: its pages fill them, scaled to the browser's own total. Enter or
+  a click on a page brings that tab, or web-app window, to the front. `h`,
+  Esc or the header row go back. A page row is one origin across all its tabs
 - **Closing:** the × on the row under the cursor, or the `x` key. One
   confirmation, which names what closes and roughly what it frees. Sites are
   closed through DevTools, so the tab goes away cleanly. Apps get SIGTERM;
@@ -41,9 +45,8 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
   offers a force kill. The shell, Hyprland and the session plumbing are
   listed but never offered.
 
-Keys: `j` `k` move, `Enter` or `l`/`h` open and close a browser row (`h` on a
-page folds it back to the browser), `x` close, `r` resample, `b` btop, `Esc`
-dismiss.
+Keys: `j` `k` move, `Enter` go, `l` into a browser, `h` back out, `x` close,
+`r` resample, `b` btop, `Esc` back or dismiss.
 
 ## How it knows which site is which
 
