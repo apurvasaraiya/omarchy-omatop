@@ -43,10 +43,27 @@ Panel {
   readonly property int visibleRows: Math.max(4, Number(setting("visibleRows", 11)) || 11)
   readonly property var rows: limitRows(Model.arrangeRows(Model.buildRows(snapshot, focusKey, 1000), sortKey, query))
   readonly property var rowMap: Model.rowMap(rows)
-  readonly property var memSegments: Model.tankSegments(snapshot, rows, "mem")
-  readonly property var cpuSegments: Model.tankSegments(snapshot, rows, "cpu")
-  readonly property var gpuSegments: Model.tankSegments(snapshot, rows, "gpu")
-  readonly property var diskSegments: Model.tankSegments(snapshot, rows, "disk")
+  readonly property var memSegments: Model.tankSegments(snapshot, rows, "mem", visibleRows)
+  readonly property var cpuSegments: Model.tankSegments(snapshot, rows, "cpu", visibleRows)
+  readonly property var gpuSegments: Model.tankSegments(snapshot, rows, "gpu", visibleRows)
+  readonly property var diskSegments: Model.tankSegments(snapshot, rows, "disk", visibleRows)
+
+  // RAM and CPU always stand; GPU and DISK step in when they have work
+  // to show or when the list is sorted by them, and step out again.
+  readonly property bool gpuAwake: sortKey === "gpu" || (snapshot && Number(snapshot.gpu) >= 3)
+  readonly property bool diskAwake: sortKey === "disk" || Model.diskActivity(snapshot, rows) >= 1024 * 1024
+  readonly property var tankSpecs: {
+    var t = [{ which: "mem", label: "RAM" }, { which: "cpu", label: "CPU" }]
+    if (gpuAwake) t.push({ which: "gpu", label: "GPU" })
+    if (diskAwake) t.push({ which: "disk", label: "DISK" })
+    return t
+  }
+  function segmentsFor(which) {
+    if (which === "cpu") return cpuSegments
+    if (which === "gpu") return gpuSegments
+    if (which === "disk") return diskSegments
+    return memSegments
+  }
   readonly property var colMax: ({
     cpu: Model.columnMax(rows, "cpu"), mem: Model.columnMax(rows, "mem"), gpu: Model.columnMax(rows, "gpu"),
     disk: Model.columnMax(rows, "disk"), net: Model.columnMax(rows, "net")
@@ -109,7 +126,7 @@ Panel {
   readonly property color urgentColor: bar ? bar.urgent : Color.urgent
   readonly property color accent: Color.accent
 
-  readonly property int rowHeight: Style.spacing.popupRowHeight + Style.space(6)
+  readonly property int rowHeight: Style.spacing.popupRowHeight + Style.space(2)
   readonly property int rowGap: Style.space(2)
   readonly property int iconSize: Style.space(16)
   readonly property int colCpu: Style.space(40)
@@ -448,12 +465,12 @@ Panel {
     onTriggered: root.pendingQuits = Object.assign({}, root.pendingQuits)
   }
 
-  // ---- A gauge: a rounded column filled bottom-up with one segment per
-  //      row in that row's colour, painted on a canvas that morphs between
-  //      layouts. Five of them stand in a row above the list, a skyline of
-  //      what is full. With a row under the cursor the rest of each gauge
-  //      dims to that one app.
-  component Gauge: Item {
+  // ---- A tank: a rounded column filled bottom-up with one segment per
+  //      row on screen, in that row's colour, painted on a canvas that
+  //      morphs between layouts. They stand beside the list, and a band
+  //      joins the lit segment to its row. With a row under the cursor the
+  //      rest of each tank dims to that one app.
+  component Tank: Item {
     id: gaugeItem
     property var target: []
     property string label: ""
@@ -463,10 +480,18 @@ Panel {
     property var fromMap: ({})
     property real progress: 1
 
-    readonly property int tubeWidth: Style.space(44)
-    readonly property int tubeHeight: Style.space(88)
+    property int tubeHeight: Style.space(88)
+    readonly property int tubeWidth: width
     readonly property real innerHeight: Math.max(0, tubeHeight - 2)
-    implicitHeight: tubeHeight + Style.space(6) + labelText.implicitHeight + Style.space(2) + captionText.implicitHeight
+    implicitHeight: tubeHeight + Style.space(5) + labelText.implicitHeight
+
+    // Top and bottom of a segment in this item's coordinates, or null.
+    function segmentSpan(key) {
+      var s = gaugeItem.shownMap[key]
+      if (!s) return null
+      var top = 1 + gaugeItem.innerHeight * (1 - s.start - s.frac)
+      return { top: top, bottom: top + gaugeItem.innerHeight * s.frac }
+    }
 
     onTargetChanged: {
       gaugeItem.fromMap = gaugeItem.shownMap
@@ -521,7 +546,7 @@ Panel {
         var ctx = getContext("2d")
         ctx.reset()
         var w = width, h = height
-        var r = Math.min(Style.cornerRadius + 2, w / 2)
+        var r = Math.min(Style.cornerRadius, w / 2)
         var fg = root.contentForeground
 
         function rounded(x, y, rw, rh, rr) {
@@ -586,30 +611,21 @@ Panel {
     Text {
       id: labelText
       anchors.top: canvas.bottom
-      anchors.topMargin: Style.space(6)
+      anchors.topMargin: Style.space(5)
       anchors.horizontalCenter: parent.horizontalCenter
       textFormat: Text.PlainText
       text: gaugeItem.label
-      color: root.contentForeground
+      color: root.dim
       font.family: root.contentFontFamily
       font.pixelSize: Style.font.caption
-      font.bold: true
-      font.letterSpacing: 1.2
+      font.letterSpacing: 1
     }
 
     Text {
       id: captionText
-      anchors.top: labelText.bottom
-      anchors.topMargin: Style.space(2)
-      anchors.horizontalCenter: parent.horizontalCenter
-      textFormat: Text.PlainText
-      text: gaugeItem.caption
-      color: root.dim
-      font.family: root.contentFontFamily
-      font.pixelSize: Style.font.caption
-      horizontalAlignment: Text.AlignHCenter
-      width: parent.width
-      elide: Text.ElideRight
+      visible: false
+      text: ""
+      height: 0
     }
   }
 
@@ -620,7 +636,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: searchField
-    contentWidth: panel.fittedContentWidth(Style.space(660))
+    contentWidth: panel.fittedContentWidth(Style.space(680))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
     popoutSwitching: root.popoutSwitching
     popoutSwitchClosing: root.popoutSwitchClosing
@@ -652,104 +668,6 @@ Panel {
           onTextChanged: { root.clearCursor(); list.positionViewAtBeginning() }
         }
 
-        // ---------- Gauges: five columns standing together ----------
-        Row {
-          id: gauges
-          width: parent.width
-          readonly property int cell: Math.floor(width / 5)
-
-          Gauge { width: gauges.cell; target: root.memSegments; label: "RAM"; caption: Model.railCaption(root.snapshot, "mem", root.rows) }
-          Gauge { width: gauges.cell; target: root.cpuSegments; label: "CPU"; caption: Model.railCaption(root.snapshot, "cpu", root.rows) }
-          Gauge { width: gauges.cell; target: root.gpuSegments; label: "GPU"; caption: Model.railCaption(root.snapshot, "gpu", root.rows) }
-          Gauge { width: gauges.cell; target: root.diskSegments; label: "DISK"; caption: Model.railCaption(root.snapshot, "disk", root.rows) }
-
-          // The network gauge is the machine's, not split by app: the kernel
-          // does not say which process a byte belonged to. Two columns in
-          // one tube, down beside up, against a 10 MB/s scale.
-          Item {
-            id: netGauge
-            width: gauges.cell
-            height: gauges.height
-            readonly property var fr: Model.netFractions(root.snapshot)
-            readonly property int tubeWidth: Style.space(44)
-            readonly property int tubeHeight: Style.space(88)
-
-            Rectangle {
-              id: netTube
-              anchors.top: parent.top
-              anchors.horizontalCenter: parent.horizontalCenter
-              width: netGauge.tubeWidth
-              height: netGauge.tubeHeight
-              radius: Math.min(Style.cornerRadius + 2, width / 2)
-              color: Qt.alpha(root.contentForeground, 0.06)
-              border.width: 1
-              border.color: Qt.alpha(root.contentForeground, 0.2)
-              clip: true
-
-              Row {
-                anchors.fill: parent
-                anchors.margins: 1
-                spacing: 1
-
-                Repeater {
-                  model: [netGauge.fr.down, netGauge.fr.up]
-                  Item {
-                    required property var modelData
-                    required property int index
-                    width: (parent.width - 1) / 2
-                    height: parent.height
-                    Rectangle {
-                      anchors.bottom: parent.bottom
-                      width: parent.width
-                      height: Math.max(0, Math.round(parent.height * modelData))
-                      color: Qt.alpha(root.accent, index === 0 ? 0.9 : 0.5)
-                      Behavior on height { NumberAnimation { duration: 800; easing.type: Easing.InOutCubic } }
-                    }
-                    Text {
-                      anchors.bottom: parent.bottom
-                      anchors.bottomMargin: Style.space(3)
-                      anchors.horizontalCenter: parent.horizontalCenter
-                      textFormat: Text.PlainText
-                      text: index === 0 ? "↓" : "↑"
-                      color: Qt.alpha(root.contentForeground, 0.5)
-                      font.family: root.contentFontFamily
-                      font.pixelSize: Style.font.caption
-                    }
-                  }
-                }
-              }
-            }
-
-            Text {
-              id: netLabel
-              anchors.top: netTube.bottom
-              anchors.topMargin: Style.space(6)
-              anchors.horizontalCenter: parent.horizontalCenter
-              textFormat: Text.PlainText
-              text: "NET"
-              color: root.contentForeground
-              font.family: root.contentFontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              font.letterSpacing: 1.2
-            }
-
-            Text {
-              anchors.top: netLabel.bottom
-              anchors.topMargin: Style.space(2)
-              anchors.horizontalCenter: parent.horizontalCenter
-              textFormat: Text.PlainText
-              text: Model.railCaption(root.snapshot, "net")
-              color: root.dim
-              font.family: root.contentFontFamily
-              font.pixelSize: Style.font.caption
-              horizontalAlignment: Text.AlignHCenter
-              width: parent.width
-              elide: Text.ElideRight
-            }
-          }
-        }
-
         // ---------- Column titles: click one to sort by it ----------
         Item {
           width: parent.width
@@ -779,7 +697,7 @@ Panel {
           SortTitle {
             sortId: "name"
             anchors.left: parent.left
-            anchors.leftMargin: Style.space(6) + Style.space(6) + root.iconSize + Style.space(8)
+            anchors.leftMargin: tanks.width + Style.space(16) + Style.space(12) + root.iconSize + Style.space(8)
             horizontalAlignment: Text.AlignLeft
           }
 
@@ -798,253 +716,362 @@ Panel {
           }
         }
 
-        // ---------- Rows, in a window that scrolls ----------
-        ListView {
-          id: list
+        // ---------- Tanks beside the rows, joined by bands ----------
+        Item {
+          id: body
           width: parent.width
-          // As tall as the rows, up to the window; the browser view with
-          // three pages does not drag an empty list behind it.
-          height: Math.max(1, Math.min(root.visibleRows, rowModel.count)) * (root.rowHeight + root.rowGap) - root.rowGap
-          Behavior on height { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
-          clip: true
-          model: rowModel
-          spacing: root.rowGap
-          boundsBehavior: Flickable.StopAtBounds
-          flickDeceleration: 4000
-          maximumFlickVelocity: 3000
+          implicitHeight: list.height + Style.space(20)
 
-          move: Transition { NumberAnimation { properties: "y"; duration: 480; easing.type: Easing.InOutCubic } }
-          displaced: Transition { NumberAnimation { properties: "y"; duration: 480; easing.type: Easing.InOutCubic } }
-          add: Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 220 } }
+          Row {
+            id: tanks
+            anchors.left: parent.left
+            anchors.top: parent.top
+            spacing: Style.space(6)
 
-          // A quiet scroll mark on the right, only when there is more.
-          Rectangle {
-            visible: list.contentHeight > list.height
-            anchors.right: parent.right
-            width: 2
-            radius: 1
-            y: list.contentHeight > 0 ? list.height * (list.contentY / list.contentHeight) : 0
-            height: list.contentHeight > 0 ? Math.max(Style.space(12), list.height * (list.height / list.contentHeight)) : 0
-            color: Qt.alpha(root.contentForeground, 0.25)
+            Repeater {
+              id: tankRepeater
+              model: root.tankSpecs
+              Tank {
+                required property var modelData
+                width: Style.space(22)
+                tubeHeight: list.height
+                target: root.segmentsFor(modelData.which)
+                label: modelData.label
+                caption: Model.railCaption(root.snapshot, modelData.which, root.rows)
+              }
+            }
           }
 
-          delegate: Item {
-            id: rowItem
-            required property string key
-            required property int index
-            readonly property var row: root.rowMap[key] || root.emptyRow
-            readonly property bool hot: root.cursor === index
-            readonly property bool isNote: row.type === "note"
-            readonly property bool isHeader: row.type === "header"
-            readonly property color tone: Model.colorFor(key)
-            readonly property string status: root.rowStatus(row)
-            readonly property bool showClose: row.closable && (hot || closeMouse.containsMouse)
-            readonly property string iconSource: root.rowIconSource(row)
+          // The bands: the lit segment of each tank joined to the next, and
+          // the last one joined to its row, one continuous shape in the
+          // row's colour. Ends follow the morphing tanks and a row position
+          // that eases, so moving the cursor bends the bands.
+          Item {
+            id: bands
+            anchors.fill: parent
+            readonly property bool active: root.cursorKey !== "" && root.cursor >= 0
+            property real rowTop: 0
+            readonly property real targetRowTop: root.cursor >= 0 ? root.cursor * (root.rowHeight + root.rowGap) - list.contentY : 0
+            onTargetRowTopChanged: if (active) rowTop = targetRowTop
+            Behavior on rowTop { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+            opacity: active ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: 180 } }
 
-            width: ListView.view ? ListView.view.width : 0
-            height: root.rowHeight
+            Connections { target: root; function onCursorKeyChanged() { bandCanvas.requestPaint() } }
+            Connections { target: list; function onContentYChanged() { if (bands.active) bands.rowTop = bands.targetRowTop } }
+            onRowTopChanged: bandCanvas.requestPaint()
+            onActiveChanged: { if (active) rowTop = targetRowTop; bandCanvas.requestPaint() }
 
-            Rectangle {
-              anchors.fill: parent
-              radius: Style.cornerRadius
-              color: rowItem.hot ? Qt.alpha(rowItem.tone, 0.14) : "transparent"
-              border.width: rowItem.hot ? 1 : 0
-              border.color: Qt.alpha(rowItem.tone, 0.6)
-              Behavior on color { ColorAnimation { duration: 140 } }
+            Timer {
+              // Tanks morph for 800 ms after a sample; keep the bands on them.
+              interval: 40
+              running: bands.active
+              repeat: true
+              onTriggered: bandCanvas.requestPaint()
             }
 
-            // The row's colour, the same one its rail segments wear.
-            Rectangle {
-              visible: !rowItem.isNote && !rowItem.isHeader
-              anchors.left: parent.left
-              anchors.leftMargin: Style.space(2)
-              anchors.verticalCenter: parent.verticalCenter
-              width: 3
-              height: parent.height - Style.space(10)
-              radius: 1.5
-              color: Qt.alpha(rowItem.tone, rowItem.hot || root.cursorKey === "" ? 0.95 : 0.35)
-              Behavior on color { ColorAnimation { duration: 140 } }
-            }
-
-            MouseArea {
+            Canvas {
+              id: bandCanvas
               anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: rowItem.isNote ? Qt.ArrowCursor : Qt.PointingHandCursor
-              onPositionChanged: function(mouse) {
-                if (pointerGate.moved(rowItem, mouse) && root.cursor !== rowItem.index) root.setCursor(rowItem.index)
+
+              function band(ctx, col, x1, t1, b1, x2, t2, b2) {
+                var cx = (x1 + x2) / 2
+                ctx.beginPath()
+                ctx.moveTo(x1, t1)
+                ctx.bezierCurveTo(cx, t1, cx, t2, x2, t2)
+                ctx.lineTo(x2, b2)
+                ctx.bezierCurveTo(cx, b2, cx, b1, x1, b1)
+                ctx.closePath()
+                ctx.fillStyle = Qt.alpha(col, 0.18)
+                ctx.fill()
+                ctx.strokeStyle = Qt.alpha(col, 0.75)
+                ctx.lineWidth = 1
+                ctx.beginPath(); ctx.moveTo(x1, t1); ctx.bezierCurveTo(cx, t1, cx, t2, x2, t2); ctx.stroke()
+                ctx.beginPath(); ctx.moveTo(x1, b1); ctx.bezierCurveTo(cx, b1, cx, b2, x2, b2); ctx.stroke()
               }
-              onClicked: root.activate(rowItem.row)
+
+              onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+                if (!bands.active) return
+                var key = root.cursorKey
+                var col = Model.colorFor(key)
+                var prev = null
+                for (var i = 0; i < tankRepeater.count; i++) {
+                  var tank = tankRepeater.itemAt(i)
+                  if (!tank) continue
+                  var span = tank.segmentSpan(key)
+                  var pos = tank.mapToItem(bands, 0, 0)
+                  var cur = span ? { left: pos.x, right: pos.x + tank.width, top: pos.y + span.top, bottom: pos.y + span.bottom }
+                                 : { left: pos.x, right: pos.x + tank.width, top: pos.y + tank.tubeHeight, bottom: pos.y + tank.tubeHeight }
+                  if (prev) band(ctx, col, prev.right, prev.top, prev.bottom, cur.left, cur.top, cur.bottom)
+                  prev = cur
+                }
+                if (!prev) return
+                var rowX = list.x
+                var rowTop = list.y + bands.rowTop
+                if (rowTop + root.rowHeight < list.y || rowTop > list.y + list.height) return
+                band(ctx, col, prev.right, prev.top, prev.bottom, rowX, rowTop, rowTop + root.rowHeight)
+              }
+            }
+          }
+
+          ListView {
+            id: list
+            anchors.left: tanks.right
+            anchors.leftMargin: Style.space(16)
+            anchors.right: parent.right
+            anchors.top: parent.top
+            // As tall as the rows, up to the window; the browser view with
+            // three pages does not drag an empty list behind it.
+            height: Math.max(1, Math.min(root.visibleRows, rowModel.count)) * (root.rowHeight + root.rowGap) - root.rowGap
+            Behavior on height { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+            clip: true
+            model: rowModel
+            spacing: root.rowGap
+            boundsBehavior: Flickable.StopAtBounds
+            flickDeceleration: 4000
+            maximumFlickVelocity: 3000
+
+            move: Transition { NumberAnimation { properties: "y"; duration: 480; easing.type: Easing.InOutCubic } }
+            displaced: Transition { NumberAnimation { properties: "y"; duration: 480; easing.type: Easing.InOutCubic } }
+            add: Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 220 } }
+
+            // A quiet scroll mark on the right, only when there is more.
+            Rectangle {
+              visible: list.contentHeight > list.height
+            anchors.right: parent.right
+              width: 2
+              radius: 1
+              y: list.contentHeight > 0 ? list.height * (list.contentY / list.contentHeight) : 0
+              height: list.contentHeight > 0 ? Math.max(Style.space(12), list.height * (list.height / list.contentHeight)) : 0
+              color: Qt.alpha(root.contentForeground, 0.25)
             }
 
-            Row {
-              anchors.left: parent.left
-              anchors.leftMargin: Style.space(12)
-              anchors.right: metrics.left
-              anchors.rightMargin: Style.space(8)
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(8)
+            delegate: Item {
+              id: rowItem
+              required property string key
+              required property int index
+              readonly property var row: root.rowMap[key] || root.emptyRow
+              readonly property bool hot: root.cursor === index
+              readonly property bool isNote: row.type === "note"
+              readonly property bool isHeader: row.type === "header"
+              readonly property color tone: Model.colorFor(key)
+              readonly property string status: root.rowStatus(row)
+              readonly property bool showClose: row.closable && (hot || closeMouse.containsMouse)
+              readonly property string iconSource: root.rowIconSource(row)
 
-              Item {
-                width: root.iconSize
-                height: root.iconSize
+              width: ListView.view ? ListView.view.width : 0
+              height: root.rowHeight
+
+              Rectangle {
+                anchors.fill: parent
+                radius: Style.cornerRadius
+                color: rowItem.hot ? Qt.alpha(rowItem.tone, 0.14) : "transparent"
+                border.width: rowItem.hot ? 1 : 0
+                border.color: Qt.alpha(rowItem.tone, 0.6)
+                Behavior on color { ColorAnimation { duration: 140 } }
+              }
+
+              // The row's colour, the same one its rail segments wear.
+              Rectangle {
+                visible: !rowItem.isNote && !rowItem.isHeader
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(2)
                 anchors.verticalCenter: parent.verticalCenter
-                visible: !rowItem.isNote
+                width: 3
+                height: parent.height - Style.space(10)
+                radius: 1.5
+                color: Qt.alpha(rowItem.tone, rowItem.hot || root.cursorKey === "" ? 0.95 : 0.35)
+                Behavior on color { ColorAnimation { duration: 140 } }
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: rowItem.isNote ? Qt.ArrowCursor : Qt.PointingHandCursor
+                onPositionChanged: function(mouse) {
+                  if (pointerGate.moved(rowItem, mouse) && root.cursor !== rowItem.index) root.setCursor(rowItem.index)
+                }
+                onClicked: root.activate(rowItem.row)
+              }
+
+              Row {
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(12)
+                anchors.right: metrics.left
+                anchors.rightMargin: Style.space(8)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(8)
+
+                Item {
+                  width: root.iconSize
+                  height: root.iconSize
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: !rowItem.isNote
+
+                  Text {
+                    anchors.centerIn: parent
+                    visible: rowItem.isHeader
+                    textFormat: Text.PlainText
+                    text: "←"
+                    color: root.dim
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                  }
+
+                  Image {
+                    id: rowIcon
+                    anchors.fill: parent
+                    visible: !rowItem.isHeader && status === Image.Ready
+                    source: rowItem.isHeader ? "" : rowItem.iconSource
+                    sourceSize.width: root.iconSize * 2
+                    sourceSize.height: root.iconSize * 2
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    asynchronous: true
+                  }
+
+                  Rectangle {
+                    anchors.fill: parent
+                    visible: !rowItem.isHeader && rowIcon.status !== Image.Ready
+                    radius: width / 2
+                    color: Qt.alpha(rowItem.tone, 0.25)
+
+                    Text {
+                      anchors.centerIn: parent
+                      textFormat: Text.PlainText
+                      text: rowItem.row.name ? rowItem.row.name.charAt(0).toUpperCase() : ""
+                      color: root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                    }
+                  }
+
+                  // An Omarchy web app is a Chromium window wearing the
+                  // app's icon; the badge says so.
+                  Image {
+                    visible: rowItem.row.omarchy && status === Image.Ready
+                    source: rowItem.row.omarchy ? root.browserIconSource : ""
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.margins: -3
+                    width: Style.space(10)
+                    height: Style.space(10)
+                    sourceSize.width: Style.space(20)
+                    sourceSize.height: Style.space(20)
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                  }
+                }
 
                 Text {
-                  anchors.centerIn: parent
-                  visible: rowItem.isHeader
                   textFormat: Text.PlainText
-                  text: "←"
-                  color: root.dim
+                  text: rowItem.row.name
+                  color: rowItem.isNote ? root.dim : root.contentForeground
                   font.family: root.contentFontFamily
-                  font.pixelSize: Style.font.body
+                  font.pixelSize: rowItem.isNote ? Style.font.caption : Style.font.body
+                  font.bold: rowItem.isHeader
+                  font.italic: rowItem.isNote
+                  anchors.verticalCenter: parent.verticalCenter
+                  elide: Text.ElideRight
+                  width: Math.min(implicitWidth, parent.width - root.iconSize - Style.space(8) - (subtitle.visible ? Style.space(50) : 0))
                 }
 
-                Image {
-                  id: rowIcon
-                  anchors.fill: parent
-                  visible: !rowItem.isHeader && status === Image.Ready
-                  source: rowItem.isHeader ? "" : rowItem.iconSource
-                  sourceSize.width: root.iconSize * 2
-                  sourceSize.height: root.iconSize * 2
-                  fillMode: Image.PreserveAspectFit
-                  smooth: true
-                  asynchronous: true
+                Text {
+                  id: subtitle
+                  visible: text !== ""
+                  textFormat: Text.PlainText
+                  text: rowItem.status !== "" ? rowItem.status : rowItem.row.subtitle
+                  color: rowItem.status !== "" && root.stillRunning(rowItem.row) ? root.urgentColor : root.dim
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+                  anchors.verticalCenter: parent.verticalCenter
+                  elide: Text.ElideRight
+                  width: Math.max(0, parent.width - x)
+                }
+              }
+
+              // Each figure sits over a hairline bar scaled to the column's
+              // largest value, so a column reads as a chart without reading.
+              Row {
+                id: metrics
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(4)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: root.colGap
+
+                component Metric: Text {
+                  property string value: ""
+                  property real share: 0
+                  property bool strong: false
+                  visible: !rowItem.isNote
+                  textFormat: Text.PlainText
+                  text: value
+                  color: strong ? root.contentForeground : root.dim
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+                  anchors.verticalCenter: parent.verticalCenter
+                  horizontalAlignment: Text.AlignRight
                 }
 
-                Rectangle {
-                  anchors.fill: parent
-                  visible: !rowItem.isHeader && rowIcon.status !== Image.Ready
-                  radius: width / 2
-                  color: Qt.alpha(rowItem.tone, 0.25)
+                Metric { width: root.colCpu; value: Model.fmtCpu(rowItem.row.cpu); share: root.colMax.cpu > 0 ? rowItem.row.cpu / root.colMax.cpu : 0; strong: rowItem.row.cpu >= 50 }
+                Metric { width: root.colMem; value: Model.fmtMem(rowItem.row.mem); share: root.colMax.mem > 0 ? rowItem.row.mem / root.colMax.mem : 0; strong: true }
+                Metric { width: root.colGpu; value: Model.fmtGpu(rowItem.row.gpu); share: root.colMax.gpu > 0 ? rowItem.row.gpu / root.colMax.gpu : 0; strong: rowItem.row.gpu >= 30 }
+                Metric { width: root.colDisk; value: Model.fmtDisk(rowItem.row.disk); share: root.colMax.disk > 0 ? rowItem.row.disk / root.colMax.disk : 0; strong: rowItem.row.disk >= 1048576 }
+                Metric { width: root.colNet; value: Model.fmtNet(rowItem.row.net); share: root.colMax.net > 0 ? rowItem.row.net / root.colMax.net : 0 }
+
+                Item {
+                  width: root.colClose
+                  height: root.colClose
+                  anchors.verticalCenter: parent.verticalCenter
 
                   Text {
                     anchors.centerIn: parent
                     textFormat: Text.PlainText
-                    text: rowItem.row.name ? rowItem.row.name.charAt(0).toUpperCase() : ""
-                    color: root.contentForeground
+                    text: "×"
+                    visible: rowItem.showClose
+                    color: closeMouse.containsMouse ? root.urgentColor : root.dim
                     font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.caption
-                    font.bold: true
+                    font.pixelSize: Style.font.title
                   }
-                }
 
-                // An Omarchy web app is a Chromium window wearing the
-                // app's icon; the badge says so.
-                Image {
-                  visible: rowItem.row.omarchy && status === Image.Ready
-                  source: rowItem.row.omarchy ? root.browserIconSource : ""
-                  anchors.right: parent.right
-                  anchors.bottom: parent.bottom
-                  anchors.margins: -3
-                  width: Style.space(10)
-                  height: Style.space(10)
-                  sourceSize.width: Style.space(20)
-                  sourceSize.height: Style.space(20)
-                  fillMode: Image.PreserveAspectFit
-                  smooth: true
-                }
-              }
-
-              Text {
-                textFormat: Text.PlainText
-                text: rowItem.row.name
-                color: rowItem.isNote ? root.dim : root.contentForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: rowItem.isNote ? Style.font.caption : Style.font.body
-                font.bold: rowItem.isHeader
-                font.italic: rowItem.isNote
-                anchors.verticalCenter: parent.verticalCenter
-                elide: Text.ElideRight
-                width: Math.min(implicitWidth, parent.width - root.iconSize - Style.space(8) - (subtitle.visible ? Style.space(50) : 0))
-              }
-
-              Text {
-                id: subtitle
-                visible: text !== ""
-                textFormat: Text.PlainText
-                text: rowItem.status !== "" ? rowItem.status : rowItem.row.subtitle
-                color: rowItem.status !== "" && root.stillRunning(rowItem.row) ? root.urgentColor : root.dim
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.caption
-                anchors.verticalCenter: parent.verticalCenter
-                elide: Text.ElideRight
-                width: Math.max(0, parent.width - x)
-              }
-            }
-
-            // Each figure sits over a hairline bar scaled to the column's
-            // largest value, so a column reads as a chart without reading.
-            Row {
-              id: metrics
-              anchors.right: parent.right
-              anchors.rightMargin: Style.space(4)
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: root.colGap
-
-              component Metric: Item {
-                property string value: ""
-                property real share: 0
-                property bool strong: false
-                visible: !rowItem.isNote
-                height: root.rowHeight
-                Text {
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  anchors.verticalCenterOffset: -Style.space(2)
-                  textFormat: Text.PlainText
-                  text: parent.value
-                  color: parent.strong ? root.contentForeground : root.dim
-                  font.family: root.contentFontFamily
-                  font.pixelSize: Style.font.caption
-                }
-                Rectangle {
-                  anchors.right: parent.right
-                  anchors.bottom: parent.bottom
-                  anchors.bottomMargin: Style.space(5)
-                  height: 2
-                  radius: 1
-                  width: Math.round(parent.width * Math.max(0, Math.min(1, parent.share)))
-                  color: Qt.alpha(rowItem.hot ? rowItem.tone : root.contentForeground, rowItem.hot ? 0.9 : 0.3)
-                  Behavior on width { NumberAnimation { duration: 800; easing.type: Easing.InOutCubic } }
-                }
-              }
-
-              Metric { width: root.colCpu; value: Model.fmtCpu(rowItem.row.cpu); share: root.colMax.cpu > 0 ? rowItem.row.cpu / root.colMax.cpu : 0; strong: rowItem.row.cpu >= 50 }
-              Metric { width: root.colMem; value: Model.fmtMem(rowItem.row.mem); share: root.colMax.mem > 0 ? rowItem.row.mem / root.colMax.mem : 0; strong: true }
-              Metric { width: root.colGpu; value: Model.fmtGpu(rowItem.row.gpu); share: root.colMax.gpu > 0 ? rowItem.row.gpu / root.colMax.gpu : 0; strong: rowItem.row.gpu >= 30 }
-              Metric { width: root.colDisk; value: Model.fmtDisk(rowItem.row.disk); share: root.colMax.disk > 0 ? rowItem.row.disk / root.colMax.disk : 0; strong: rowItem.row.disk >= 1048576 }
-              Metric { width: root.colNet; value: Model.fmtNet(rowItem.row.net); share: root.colMax.net > 0 ? rowItem.row.net / root.colMax.net : 0 }
-
-              Item {
-                width: root.colClose
-                height: root.colClose
-                anchors.verticalCenter: parent.verticalCenter
-
-                Text {
-                  anchors.centerIn: parent
-                  textFormat: Text.PlainText
-                  text: "×"
-                  visible: rowItem.showClose
-                  color: closeMouse.containsMouse ? root.urgentColor : root.dim
-                  font.family: root.contentFontFamily
-                  font.pixelSize: Style.font.title
-                }
-
-                MouseArea {
-                  id: closeMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  enabled: rowItem.row.closable
-                  cursorShape: Qt.PointingHandCursor
-                  onPositionChanged: function(mouse) {
-                    if (pointerGate.moved(rowItem, mouse) && root.cursor !== rowItem.index) root.setCursor(rowItem.index)
+                  MouseArea {
+                    id: closeMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: rowItem.row.closable
+                    cursorShape: Qt.PointingHandCursor
+                    onPositionChanged: function(mouse) {
+                      if (pointerGate.moved(rowItem, mouse) && root.cursor !== rowItem.index) root.setCursor(rowItem.index)
+                    }
+                    onClicked: root.requestClose(rowItem.row)
                   }
-                  onClicked: root.requestClose(rowItem.row)
                 }
               }
             }
           }
+
+        }
+
+        // The figures, one quiet line: every resource, tank or not.
+        Text {
+          textFormat: Text.PlainText
+          text: {
+            var parts = ["RAM " + Model.railCaption(root.snapshot, "mem", root.rows),
+                         "CPU " + Model.railCaption(root.snapshot, "cpu", root.rows),
+                         "GPU " + Model.railCaption(root.snapshot, "gpu", root.rows),
+                         "DISK " + Model.railCaption(root.snapshot, "disk", root.rows),
+                         "NET " + Model.railCaption(root.snapshot, "net")]
+            return parts.join("    ")
+          }
+          color: Qt.alpha(root.dim, 0.8)
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.caption
+          width: parent.width
+          horizontalAlignment: Text.AlignRight
+          elide: Text.ElideLeft
         }
 
         Text {

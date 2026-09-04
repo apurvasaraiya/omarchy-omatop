@@ -456,10 +456,13 @@ function focusMeta(rows, snapshot) {
 //
 // Each segment: { key, parentKey, frac, depth, rank, start } with frac of
 // the tank's full height. Whatever is left is the tank's empty top.
-function tankSegments(snapshot, rows, which) {
+function tankSegments(snapshot, rows, which, visibleCount) {
   var out = []
   if (!snapshot || !snapshot.mem || !rows || rows.length === 0) return out
   var focused = rows[0].type === "header"
+  // Only the rows on screen get a segment of their own; a sliver thinner
+  // than a pixel for row forty says nothing, so the rest fold into one.
+  var limit = visibleCount === undefined ? rows.length : visibleCount
   var total
   if (focused) total = Math.max(1, Number(rows[0][which]) || 0)
   else if (which === "cpu") total = (Number(snapshot.ncpu) || 1) * 100
@@ -471,9 +474,10 @@ function tankSegments(snapshot, rows, which) {
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i]
     if (row.type === "note" || row.type === "header") continue
-    rank++
     var v = Number(row[which]) || 0
     accounted += v
+    if (i >= limit) continue
+    rank++
     out.push({ key: row.key, parentKey: row.parentKey, frac: share(v, total), depth: row.depth, rank: rank })
   }
   // Everything the list does not show: in the focused view the pages past
