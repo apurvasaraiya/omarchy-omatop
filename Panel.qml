@@ -67,7 +67,15 @@ Panel {
   }
 
   ListModel { id: rowModel }
-  onRowsChanged: syncKeys(rowModel, Model.keysOf(rows))
+  onRowsChanged: {
+    syncKeys(rowModel, Model.keysOf(rows))
+    pointerGate.reset()
+  }
+
+  // A delegate created or moved under a resting pointer reports a hover it
+  // never earned. The gate only lets deliberate pointer travel move the
+  // cursor; keys and samples reset it.
+  PointerMoveGate { id: pointerGate; referenceItem: body; threshold: 2 }
 
   // Bring a ListModel of {key} into the given order with the fewest moves,
   // so existing delegates survive and animate to their new place.
@@ -185,8 +193,14 @@ Panel {
     return at !== undefined && (Date.now() - at) > 5000
   }
 
+  // For the IPC: where the cursor is, for checking the panel from a shell.
+  function debugState() {
+    return JSON.stringify({ cursor: root.cursor, cursorKey: root.cursorKey, rows: root.rows.length, focus: root.focusKey, sort: root.sortKey, query: root.query })
+  }
+
   // ---- Cursor moves
   function moveCursor(delta) {
+    pointerGate.reset()
     if (root.rows.length === 0) return
     var next = root.cursor < 0 ? (delta > 0 ? 0 : root.rows.length - 1) : Model.clampIndex(root.cursor + delta, root.rows.length)
     setCursor(next)
@@ -349,6 +363,7 @@ Panel {
   onOpenedChanged: {
     if (opened) {
       root.lastError = ""
+      pointerGate.reset()
       watchProc.running = true
     } else {
       watchProc.running = false
@@ -540,6 +555,7 @@ Panel {
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       onPositionChanged: function(mouse) {
+        if (!pointerGate.moved(tankItem, mouse)) return
         var key = tankItem.keyAt(mouse.y)
         if (key !== "") root.setCursorKey(key)
       }
@@ -946,7 +962,9 @@ Panel {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: rowItem.isNote ? Qt.ArrowCursor : Qt.PointingHandCursor
-                    onPositionChanged: if (root.cursor !== rowItem.index) root.setCursor(rowItem.index)
+                    onPositionChanged: function(mouse) {
+                      if (pointerGate.moved(rowItem, mouse) && root.cursor !== rowItem.index) root.setCursor(rowItem.index)
+                    }
                     onClicked: root.activate(rowItem.row)
                   }
 
@@ -1078,7 +1096,9 @@ Panel {
                         hoverEnabled: true
                         enabled: rowItem.row.closable
                         cursorShape: Qt.PointingHandCursor
-                        onPositionChanged: if (root.cursor !== rowItem.index) root.setCursor(rowItem.index)
+                        onPositionChanged: function(mouse) {
+                          if (pointerGate.moved(rowItem, mouse) && root.cursor !== rowItem.index) root.setCursor(rowItem.index)
+                        }
                         onClicked: root.requestClose(rowItem.row)
                       }
                     }
