@@ -102,6 +102,9 @@ Panel {
   // ---- Cursor: shared by keyboard, rows and rail segments. -1 is "nothing yet".
   property int cursor: -1
   property string cursorKey: ""
+  // A selection made by the pointer lets go when the pointer leaves the
+  // panel's body; one made by the keys stays until Esc.
+  property bool cursorByPointer: false
   readonly property var hoverRow: cursor >= 0 && cursor < rows.length ? rows[cursor] : null
 
   // ---- Confirmation and the escalation after a polite quit was ignored.
@@ -210,6 +213,7 @@ Panel {
   // ---- Cursor moves
   function moveCursor(delta) {
     pointerGate.reset()
+    root.cursorByPointer = false
     if (root.rows.length === 0) return
     var next = root.cursor < 0 ? (delta > 0 ? 0 : root.rows.length - 1) : Model.clampIndex(root.cursor + delta, root.rows.length)
     setCursor(next)
@@ -229,9 +233,24 @@ Panel {
     }
   }
 
+  function pointerCursor(index) {
+    root.cursorByPointer = true
+    setCursor(index)
+  }
+
+  function pointerCursorKey(key) {
+    root.cursorByPointer = true
+    setCursorKey(key)
+  }
+
   function clearCursor() {
     root.cursor = -1
     root.cursorKey = ""
+    root.cursorByPointer = false
+  }
+
+  function releasePointerCursor() {
+    if (root.cursorByPointer && !root.confirmOpen) clearCursor()
   }
 
   // ---- Sorting. The choice is written back to shell.json, so it is the
@@ -351,7 +370,8 @@ Panel {
     if (ctrl && event.key === Qt.Key_X) { requestClose(root.hoverRow); return true }
     if (event.key === Qt.Key_Delete && searchField.text === "") { requestClose(root.hoverRow); return true }
     if (event.key === Qt.Key_Escape) {
-      if (searchField.text !== "") searchField.text = ""
+      if (root.cursor >= 0) clearCursor()
+      else if (searchField.text !== "") searchField.text = ""
       else if (root.focused) drillOut()
       else root.close()
       return true
@@ -479,8 +499,8 @@ Panel {
     property var fromMap: ({})
     property real progress: 1
 
-    readonly property int tubeWidth: Style.space(44)
-    readonly property int tubeHeight: Style.space(88)
+    readonly property int tubeWidth: Style.space(64)
+    readonly property int tubeHeight: Style.space(116)
     readonly property real innerHeight: Math.max(0, tubeHeight - 2)
     implicitHeight: tubeHeight + Style.space(6) + labelText.implicitHeight + Style.space(2) + captionText.implicitHeight
 
@@ -599,7 +619,8 @@ Panel {
         onPositionChanged: function(mouse) {
           if (!pointerGate.moved(gaugeItem, mouse)) return
           var key = gaugeItem.keyAt(mouse.y)
-          if (key !== "") root.setCursorKey(key)
+          if (key !== "") root.pointerCursorKey(key)
+          else root.releasePointerCursor()
         }
         onClicked: function(mouse) {
           var key = gaugeItem.keyAt(mouse.y)
@@ -654,6 +675,17 @@ Panel {
       id: keyHost
       anchors.fill: parent
 
+      // Leaving the gauges and the list, into the field, the titles or off
+      // the panel, lets a pointer selection go after a beat, so the
+      // machine's own figures come back without a gesture.
+      readonly property bool bodyHovered: gaugesHover.hovered || listHover.hovered
+      onBodyHoveredChanged: if (!bodyHovered) releaseTimer.restart(); else releaseTimer.stop()
+      Timer {
+        id: releaseTimer
+        interval: 220
+        onTriggered: root.releasePointerCursor()
+      }
+
       Column {
         id: column
         anchors.left: parent.left
@@ -681,6 +713,7 @@ Panel {
         Item {
           width: parent.width
           implicitHeight: gauges.implicitHeight
+          HoverHandler { id: gaugesHover }
 
           // The ribbons: with a row under the cursor, its segment in each
           // gauge is joined to the same segment in the next, in the row's
@@ -762,8 +795,8 @@ Panel {
             width: gauges.cell
             height: gauges.height
             readonly property var fr: Model.netFractions(root.snapshot)
-            readonly property int tubeWidth: Style.space(44)
-            readonly property int tubeHeight: Style.space(88)
+            readonly property int tubeWidth: Style.space(64)
+            readonly property int tubeHeight: Style.space(116)
 
             Rectangle {
               id: netTube
@@ -906,6 +939,8 @@ Panel {
           flickDeceleration: 4000
           maximumFlickVelocity: 3000
 
+          HoverHandler { id: listHover }
+
           move: Transition { NumberAnimation { properties: "y"; duration: 480; easing.type: Easing.InOutCubic } }
           displaced: Transition { NumberAnimation { properties: "y"; duration: 480; easing.type: Easing.InOutCubic } }
           add: Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 220 } }
@@ -964,7 +999,7 @@ Panel {
               hoverEnabled: true
               cursorShape: rowItem.isNote ? Qt.ArrowCursor : Qt.PointingHandCursor
               onPositionChanged: function(mouse) {
-                if (pointerGate.moved(rowItem, mouse) && root.cursor !== rowItem.index) root.setCursor(rowItem.index)
+                if (pointerGate.moved(rowItem, mouse) && root.cursor !== rowItem.index) root.pointerCursor(rowItem.index)
               }
               onClicked: root.activate(rowItem.row)
             }
@@ -1131,7 +1166,7 @@ Panel {
                   enabled: rowItem.row.closable
                   cursorShape: Qt.PointingHandCursor
                   onPositionChanged: function(mouse) {
-                    if (pointerGate.moved(rowItem, mouse) && root.cursor !== rowItem.index) root.setCursor(rowItem.index)
+                    if (pointerGate.moved(rowItem, mouse) && root.cursor !== rowItem.index) root.pointerCursor(rowItem.index)
                   }
                   onClicked: root.requestClose(rowItem.row)
                 }

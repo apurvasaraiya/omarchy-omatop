@@ -587,9 +587,12 @@ function rowFigure(row, which) {
 function railCaption(snapshot, which, rows, history) {
   if (!snapshot || !snapshot.mem) return ""
   if (which === "mem" && history) {
+    // The trend is an arrow, not a word: it fits under the gauge and reads
+    // before the number does. Climbing is the one worth noticing.
+    var arrows = { climbing: " ↗", steady: " →", falling: " ↘" }
     var trend = historyTrend(history)
     var base = (rows && rows.length > 0 && rows[0].type === "header") ? fmtMem(rows[0].mem) + " of " + fmtMem(snapshot.mem.total) : fmtMem(snapshot.mem.used) + " of " + fmtMem(snapshot.mem.total)
-    return trend !== "" ? base + " · " + trend : base
+    return trend !== "" ? base + arrows[trend] : base
   }
   // Focused on a browser, the rails are the browser's, so are the captions.
   if (rows && rows.length > 0 && rows[0].type === "header") {
