@@ -11,21 +11,26 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
 
 ## What you see
 
-- **Bar:** a memory glyph with a one-pixel mark under it. The mark's fill is
-  the share of RAM in use; it thickens and takes the urgent colour when less
-  than 12% is free. Hover reads the numbers. Middle click posts them as a
+- **Bar:** a glyph with a one-pixel mark under it. The mark's fill is the
+  share of RAM in use. The glyph has four states from the cheap sample it
+  takes every twenty seconds: dimmed when calm, full strength when busy
+  (RAM over 75% or load over half the cores), a processor glyph when the CPU
+  is what is saturated, and the urgent colour with a slow breath when memory
+  is nearly gone. Hover reads the numbers. Middle click posts them as a
   notification. Right click opens btop.
 - **Panel (left click):** one sentence up top, for example
   "Chromium holds 3.4 GB, mostly cursor.com", the totals beneath it, and a
   stacked bar of the biggest apps so the shares can be compared without
-  reading. Then one row per app, heaviest first: name, window title or
-  process count, CPU, memory. Each row's own share is painted faintly behind
-  it.
-- **Browser rows** open into sites. A site row is one origin across all its
-  tabs and windows, including the web apps Omarchy launches as `--app`
-  windows. Three buckets catch what is not a page: Extensions, Background
-  pages (prerender, service workers, tabs mid-close) and Browser core (UI,
-  GPU, network).
+  reading. Then the ten heaviest apps: name, window title or process count,
+  CPU, memory. Each row's own share is painted faintly behind it. There is
+  no "and n more"; what does not make the top ten is not what is slowing
+  the machine.
+- **Browser rows** are collapsed until you open them, then show the five
+  heaviest pages and one row for the browser itself (extensions, GPU,
+  network, background pages). A page row is one origin across all its tabs
+  and windows. Pages that Omarchy installed as web apps are named after the
+  app and tagged "Omarchy app", so YouTube, WhatsApp and friends read apart
+  from whatever else you have open.
 - **Closing:** the × on the row under the cursor, or the `x` key. One
   confirmation, which names what closes and roughly what it frees. Sites are
   closed through DevTools, so the tab goes away cleanly. Apps get SIGTERM;
@@ -34,7 +39,7 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
   listed but never offered.
 
 Keys: `j` `k` move, `Enter` or `l`/`h` open and close a browser row, `x`
-close, `m` show every app, `r` resample, `b` btop, `Esc` dismiss.
+close, `r` resample, `b` btop, `Esc` dismiss.
 
 ## How it knows which site is which
 
@@ -77,7 +82,9 @@ side of the bar. Restart Chromium once for site rows.
 
 Settings, in the widget's entry in `~/.config/omarchy/shell.json`:
 
-- `maxApps` (default 8): rows shown before the "n more" summary.
+- `maxApps` (default 10): how many apps the panel lists.
+- `card` is set to `false` on install, so the widget sits in the bar without
+  the per-widget card outline of the V7 bar clone.
 
 ## Files
 

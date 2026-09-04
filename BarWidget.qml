@@ -19,6 +19,12 @@ BarWidget {
   readonly property real usedFraction: Model.usedFraction(snapshot)
   readonly property bool tight: Model.isTight(snapshot)
 
+  // calm: dimmed memory glyph. busy: full strength. cpu: the glyph becomes
+  // a processor because that is what is saturated. hot: urgent colour and a
+  // slow breath, the one animation in the widget.
+  readonly property string state: Model.barState(snapshot)
+  readonly property bool hot: state === "hot"
+
   readonly property string scriptPath: String(Qt.resolvedUrl("omatop")).replace(/^file:\/\//, "")
 
   function refresh() {
@@ -122,9 +128,18 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "󰍛"
-    active: root.tight
+    text: Model.barGlyph(root.state)
+    active: root.hot
+    dimmed: root.state === "calm"
     tooltipText: Model.barTooltip(root.snapshot)
+
+    SequentialAnimation on opacity {
+      running: root.hot
+      loops: Animation.Infinite
+      alwaysRunToEnd: true
+      NumberAnimation { from: 1.0; to: 0.45; duration: 1400; easing.type: Easing.InOutSine }
+      NumberAnimation { from: 0.45; to: 1.0; duration: 1400; easing.type: Easing.InOutSine }
+    }
 
     onPressed: function(b) {
       if (b === Qt.RightButton) { if (root.bar) root.bar.run("omarchy-launch-tui btop") }
@@ -148,8 +163,8 @@ BarWidget {
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         width: Math.max(1, Math.round(parent.width * root.usedFraction))
-        height: root.tight ? 2 : 1
-        color: root.tight ? button.activeColor : button.foreground
+        height: root.hot ? 2 : 1
+        color: root.hot || root.state === "cpu" ? button.activeColor : button.foreground
 
         Behavior on width { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
       }

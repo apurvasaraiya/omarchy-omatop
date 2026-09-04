@@ -54,6 +54,9 @@ PRETTY = {
 # Killing these ends the session, not a hog. They get shown, never offered.
 PROTECTED_COMMS = {"Hyprland", "quickshell", "systemd", "uwsm", "Xwayland", "pipewire", "wireplumber", "dbus-broker"}
 
+# Session plumbing that is never the answer and never closable.
+HIDDEN_COMMS = {"systemd", "(sd-pam)", "dbus-broker-lau", "dbus-broker"}
+
 BROWSER_COMMS = {"chromium", "chrome", "brave", "helium", "google-chrome", "chromium-browse"}
 
 
@@ -462,6 +465,34 @@ class SiteResolver:
         return pids
 
 
+def omarchy_webapps():
+    """host -> app name, from the launchers Omarchy writes for web apps."""
+    apps = {}
+    d = os.path.join(HOME, ".local", "share", "applications")
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return apps
+    for fn in names:
+        if not fn.endswith(".desktop"):
+            continue
+        txt = read(os.path.join(d, fn), 1 << 14)
+        if "omarchy-launch-webapp" not in txt:
+            continue
+        name = ""
+        url = ""
+        for line in txt.splitlines():
+            if line.startswith("Name=") and not name:
+                name = line[5:].strip()
+            elif line.startswith("Exec=") and "omarchy-launch-webapp" in line:
+                m = re.search(r"omarchy-launch-webapp\s+\"?(\S+?)\"?(\s|$)", line)
+                if m:
+                    url = m.group(1)
+        if name and url:
+            apps[host_of(url)] = name
+    return apps
+
+
 def browser_profile_dir(root_cmd):
     for arg in root_cmd:
         if arg.startswith("--user-data-dir="):
@@ -493,6 +524,8 @@ class Sampler:
         self.resolvers = {}  # profile dir -> SiteResolver
         self.pss_budget = 32
         self.order = []      # row keys in last-published order, for stable sorting
+        self.webapps = omarchy_webapps()
+        self.webapps_read = time.monotonic()
 
     def light(self):
         return {"ts": time.time(), "light": True, "mem": meminfo(), "load": loadavg(), "ncpu": NCPU}
@@ -533,7 +566,7 @@ class Sampler:
         apps = []
         for r, g in groups.items():
             rp = procs.get(r)
-            if rp is None:
+            if rp is None or rp["comm"] in HIDDEN_COMMS:
                 continue
             pids = g["pids"]
             comm = rp["comm"]
@@ -597,15 +630,22 @@ class Sampler:
         renderers = {pid for pid, k in kinds.items() if k == "renderer"}
         by_host = resolver.sites(renderers)
 
+        if time.monotonic() - self.webapps_read > 60:
+            self.webapps = omarchy_webapps()
+            self.webapps_read = time.monotonic()
+
         rows = []
         claimed = set()
         for host, site in by_host.items():
             pids = sorted(p for p in site["pids"] if p in renderers)
             claimed.update(pids)
+            app_name = self.webapps.get(host, "")
             rows.append({
                 "key": "site:%s" % host,
                 "kind": "site",
                 "name": host,
+                "app": app_name,
+                "omarchy": bool(app_name),
                 "title": site["titles"][0] if site["titles"] else "",
                 "tabs": len(site["targets"]),
                 "targets": site["targets"],

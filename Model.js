@@ -64,10 +64,10 @@ function heroTitle(snapshot) {
   if (s >= 0.3) {
     var line = top.name + " holds " + fmtMem(top.mem)
     var site = topSite(top)
-    if (site && share(site.mem, top.mem) >= 0.35) line += ", mostly " + site.name
+    if (site && share(site.mem, top.mem) >= 0.35) line += ", mostly " + (site.omarchy ? site.app : site.name)
     return line
   }
-  return "No single hog. " + top.name + " leads at " + fmtMem(top.mem)
+  return top.name + " leads at " + fmtMem(top.mem) + ", no hog"
 }
 
 function heroMeta(snapshot) {
@@ -76,7 +76,7 @@ function heroMeta(snapshot) {
   var parts = [fmtMem(m.used) + " of " + fmtMem(m.total) + " in use"]
   if (isTight(snapshot)) parts.push("only " + fmtMem(m.available) + " free")
   var load = fmtLoad(snapshot.load)
-  if (load !== "") parts.push("load " + load)
+  if (load !== "") parts.push("load " + load + (snapshot.ncpu ? " on " + snapshot.ncpu + " cores" : ""))
   return parts.join(" · ")
 }
 
@@ -88,13 +88,17 @@ function barTooltip(snapshot) {
   return line
 }
 
-// Rows the panel paints, top to bottom. Apps first by memory, sites nested
-// under an expanded browser, and one summary row standing in for the tail.
-function buildRows(snapshot, expanded, showAll, maxApps) {
+// Rows the panel paints, top to bottom. The heaviest apps, and under an
+// opened browser its heaviest pages plus one row for the browser itself.
+// No "and n more": what does not make the cut is not what is slowing the
+// machine.
+var MAX_PAGES = 5
+
+function buildRows(snapshot, expanded, maxApps) {
   var rows = []
   if (!snapshot || !snapshot.apps) return rows
   var apps = snapshot.apps
-  var limit = showAll ? apps.length : Math.min(apps.length, maxApps)
+  var limit = Math.min(apps.length, maxApps)
   for (var i = 0; i < limit; i++) {
     var app = apps[i]
     var open = expanded[app.key] === true
@@ -115,65 +119,105 @@ function buildRows(snapshot, expanded, showAll, maxApps) {
       devtools: app.devtools || "",
       profile: app.profile || "",
       targets: [],
+      omarchy: false,
       depth: 0
     })
-    if (open && app.sites) {
-      for (var j = 0; j < app.sites.length; j++) {
-        var site = app.sites[j]
-        rows.push({
-          type: site.kind,
-          key: app.key + "/" + site.key,
-          name: site.name,
-          subtitle: siteSubtitle(site),
-          mem: site.mem,
-          cpu: site.cpu,
-          pids: site.pids,
-          root: 0,
-          protectedRow: false,
-          expandable: false,
-          expanded: false,
-          closable: site.closable === true && site.targets.length > 0,
-          browser: false,
-          devtools: "",
-          profile: app.profile || "",
-          targets: site.targets,
-          depth: 1
-        })
-      }
-      if (app.devtools !== "ok") {
-        rows.push({
-          type: "note",
-          key: app.key + "/note",
-          name: devtoolsNote(app.devtools),
-          subtitle: "", mem: 0, cpu: 0, pids: [], root: 0, protectedRow: true,
-          expandable: false, expanded: false, closable: false, browser: false,
-          devtools: "", profile: "", targets: [], depth: 1
-        })
-      }
-    }
-  }
-  if (!showAll && apps.length > limit) {
-    var rest = 0
-    for (var k = limit; k < apps.length; k++) rest += apps[k].mem
-    rows.push({
-      type: "more",
-      key: "more",
-      name: (apps.length - limit) + " more",
-      subtitle: "press m",
-      mem: rest, cpu: 0, pids: [], root: 0, protectedRow: true,
-      expandable: false, expanded: false, closable: false, browser: false,
-      devtools: "", profile: "", targets: [], depth: 0
-    })
+    if (open && app.sites) appendBrowserRows(rows, app)
   }
   return rows
 }
 
-function siteSubtitle(site) {
-  if (site.kind === "site") {
-    if (site.tabs > 1) return site.tabs + " tabs"
-    return site.title || ""
+function appendBrowserRows(rows, app) {
+  var pages = []
+  var selfPids = []
+  var selfMem = 0
+  var selfCpu = 0
+  for (var j = 0; j < app.sites.length; j++) {
+    var site = app.sites[j]
+    if (site.kind === "site") pages.push(site)
+    else {
+      selfPids = selfPids.concat(site.pids)
+      selfMem += site.mem
+      selfCpu += site.cpu
+    }
   }
-  return site.title || ""
+  for (var k = 0; k < Math.min(pages.length, MAX_PAGES); k++) {
+    var page = pages[k]
+    rows.push({
+      type: "site",
+      key: app.key + "/" + page.key,
+      name: page.omarchy ? page.app : page.name,
+      subtitle: siteSubtitle(page),
+      mem: page.mem,
+      cpu: page.cpu,
+      pids: page.pids,
+      root: 0,
+      protectedRow: false,
+      expandable: false,
+      expanded: false,
+      closable: page.closable === true && page.targets.length > 0,
+      browser: false,
+      devtools: "",
+      profile: app.profile || "",
+      targets: page.targets,
+      omarchy: page.omarchy === true,
+      depth: 1
+    })
+  }
+  if (selfPids.length > 0) {
+    rows.push({
+      type: "bucket",
+      key: app.key + "/self",
+      name: app.name + " itself",
+      subtitle: "extensions, GPU, network, background pages",
+      mem: selfMem,
+      cpu: Math.round(selfCpu * 10) / 10,
+      pids: selfPids,
+      root: 0, protectedRow: false, expandable: false, expanded: false,
+      closable: false, browser: false, devtools: "", profile: "", targets: [],
+      omarchy: false, depth: 1
+    })
+  }
+  if (app.devtools !== "ok") {
+    rows.push({
+      type: "note",
+      key: app.key + "/note",
+      name: devtoolsNote(app.devtools),
+      subtitle: "", mem: 0, cpu: 0, pids: [], root: 0, protectedRow: true,
+      expandable: false, expanded: false, closable: false, browser: false,
+      devtools: "", profile: "", targets: [], omarchy: false, depth: 1
+    })
+  }
+}
+
+function siteSubtitle(site) {
+  var parts = []
+  if (site.omarchy) parts.push("Omarchy app")
+  if (site.tabs > 1) parts.push(site.tabs + " tabs")
+  else if (site.omarchy) parts.push(site.name)
+  else if (site.title) parts.push(site.title)
+  return parts.join(" · ")
+}
+
+// The bar's three states, from the cheap sample: calm, working, hot.
+// "Hot" is either memory nearly gone or every core busy; the glyph swaps to
+// the CPU when it is the processor that is saturated and memory is fine.
+function loadFraction(snapshot) {
+  if (!snapshot || !snapshot.load || !snapshot.ncpu) return 0
+  return (Number(snapshot.load[0]) || 0) / snapshot.ncpu
+}
+
+function barState(snapshot) {
+  if (!snapshot || !snapshot.mem) return "calm"
+  var cpuHot = loadFraction(snapshot) >= 0.9
+  if (isTight(snapshot) || (cpuHot && usedFraction(snapshot) >= 0.8)) return "hot"
+  if (cpuHot) return "cpu"
+  if (usedFraction(snapshot) >= 0.75 || loadFraction(snapshot) >= 0.5) return "busy"
+  return "calm"
+}
+
+function barGlyph(state) {
+  return state === "cpu" ? "\u{F0EE0}" : "\u{F035B}"
 }
 
 function devtoolsNote(status) {

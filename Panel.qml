@@ -27,9 +27,8 @@ Panel {
   // ---- Data
   property var snapshot: null
   property var expanded: ({})
-  property bool showAll: false
-  readonly property int maxApps: Math.max(3, Number(setting("maxApps", 8)) || 8)
-  readonly property var rows: Model.buildRows(snapshot, expanded, showAll, maxApps)
+  readonly property int maxApps: Math.max(3, Number(setting("maxApps", 10)) || 10)
+  readonly property var rows: Model.buildRows(snapshot, expanded, maxApps)
   readonly property var apps: snapshot && snapshot.apps ? snapshot.apps : []
 
   // ---- Cursor: shared by keyboard and pointer. -1 is "nothing yet".
@@ -90,13 +89,6 @@ Panel {
     var snap
     try { snap = JSON.parse(line) } catch (e) { return }
     if (!snap || snap.light) return
-    // First time a browser tops the list, open it: that is the question the
-    // panel exists to answer. After that the choice is the user's.
-    if (root.snapshot === null && snap.apps && snap.apps.length > 0 && snap.apps[0].browser) {
-      var e = {}
-      e[snap.apps[0].key] = true
-      root.expanded = e
-    }
     root.snapshot = snap
     reconcileCursor()
     reconcilePending(snap)
@@ -141,7 +133,6 @@ Panel {
 
   function activate(row) {
     if (!row) return
-    if (row.type === "more") { root.showAll = true; return }
     if (row.expandable) toggleExpanded(row.key)
   }
 
@@ -288,8 +279,7 @@ Panel {
         onCloseRequested: root.close()
         onTabRequested: function(direction) { root.switchPanel(direction) }
         onTextKey: function(text) {
-          if (text === "m") root.showAll = !root.showAll
-          else if (text === "r") root.refresh()
+          if (text === "r") root.refresh()
           else if (text === "b" && root.bar) root.bar.run("omarchy-launch-tui btop")
         }
 
@@ -436,7 +426,7 @@ Panel {
                 readonly property var row: modelData
                 readonly property bool hot: root.cursor === index
                 readonly property bool isNote: row.type === "note"
-                readonly property bool isMore: row.type === "more"
+                readonly property bool isMore: false
                 readonly property string status: root.rowStatus(row)
                 readonly property real memShare: root.snapshot && root.snapshot.mem ? Model.share(row.mem, root.snapshot.mem.used) : 0
                 readonly property bool showClose: row.closable && (hot || closeMouse.containsMouse)
@@ -597,7 +587,7 @@ Panel {
           // ---------- Keys ----------
           Text {
             textFormat: Text.PlainText
-            text: "j k move · enter open · x close · m more · b btop"
+            text: "j k move · enter open · x close · b btop"
             color: Qt.alpha(root.dim, 0.7)
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption
