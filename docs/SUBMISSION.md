@@ -1,13 +1,13 @@
 # Marketplace submission draft
 
-Fill the commit SHA in before posting.
+Post as an issue on HANCORE-linux/omarchy-plugin-marketplace. The commit below is tag v1.0.0; re-review pins a new SHA after any fix.
 
 ---
 
 **Plugin:** Omatop — who is eating the laptop
 **Id:** `apurva.omatop`
 **Repo:** https://github.com/apurvasaraiya/omarchy-omatop
-**Commit:** `<sha>`
+**Commit:** `d15137c986aa56c8219d4b71348ad6325e9a0047` (tag `v1.0.0`)
 **Kinds:** bar-widget
 **Author:** Apurva Saraiya
 
@@ -27,15 +27,17 @@ light sample every 20 s while closed, and short one-shot actions.
 - `/proc/meminfo`, `/proc/loadavg`, `/proc/uptime`, `/proc/net/dev`,
   `/proc/diskstats`.
 - `~/.local/share/applications/*.desktop` (to recognise Omarchy web apps).
-- `~/.config/chromium/DevToolsActivePort` and, over 127.0.0.1, the
-  Chromium DevTools protocol, only when the user has enabled it.
+- `~/.config/chromium/DevToolsActivePort` for older setups and, over
+  `127.0.0.1`, the Chromium DevTools protocol, only when the user has enabled
+  it.
 - A read-only copy of `~/.config/chromium/Default/Favicons`.
 
 **What it writes:**
 - `$XDG_RUNTIME_DIR/omatop-<uid>/icons/`: favicon PNGs and the database
   copy (0700 dir, exclusive temp + rename, size-capped).
-- `~/.config/chromium-flags.conf`: one appended line, only when the user
-  presses Enter on the "turn on the page view" row or runs `omatop setup`.
+- `~/.config/chromium-flags.conf`: one fixed nonzero DevTools port line, only
+  when the user presses Enter on the "turn on the page view" row or runs
+  `omatop setup`.
 - `~/.config/omarchy/shell.json`: the sort choice, through the shell's own
   `updateEntryInline`.
 
