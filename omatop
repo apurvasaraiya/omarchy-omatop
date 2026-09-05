@@ -488,10 +488,13 @@ def read_devtools_endpoint(profile_dir, port=None):
             return endpoint
         if port != DEFAULT_DEVTOOLS_PORT:
             return None
+    # No port on the command line: only this profile's own DevToolsActivePort
+    # may speak for it. Guessing the default port here would hand one
+    # browser's tabs to another browser that never opened DevTools.
     txt = read(devtools_port_file(profile_dir), 512)
     lines = txt.strip().splitlines()
     if len(lines) < 2 or not lines[0].isdigit():
-        return fixed_devtools_endpoint(DEFAULT_DEVTOOLS_PORT) if port is None else None
+        return None
     active_port = int(lines[0])
     if active_port <= 0:
         return None
@@ -777,14 +780,18 @@ def configured_devtools_port():
 
 
 def process_devtools_port(cmd):
+    """The port a browser was actually started with. The last flag wins,
+    as it does in Chromium, so a launcher's own flag can override the one
+    from chromium-flags.conf."""
+    port = None
     for arg in cmd:
         if not arg.startswith("--remote-debugging-port="):
             continue
         try:
-            return int(arg.split("=", 1)[1])
+            port = int(arg.split("=", 1)[1])
         except ValueError:
-            return None
-    return None
+            port = None
+    return port
 
 
 def browser_profile_dir(root_cmd):
