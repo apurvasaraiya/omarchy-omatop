@@ -288,6 +288,13 @@ Panel {
     Qt.callLater(function() { if (back !== "") setCursorKey(back) })
   }
 
+  // For the IPC: open the panel inside a given browser's pages.
+  function openInto(key) {
+    if (!root.opened) root.open()
+    var app = Model.findApp(root.snapshot, key)
+    if (app && app.browser) drillInto(key)
+  }
+
   // For the IPC: land on a row by key and ask to close it, so the whole
   // quit flow can be driven (and tested) without a pointer.
   function requestCloseKey(key) {
