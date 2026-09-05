@@ -41,6 +41,13 @@ function fmtRate(bytesPerSec) {
   return (n / (1024 * 1024)).toFixed(1) + " MB/s"
 }
 
+// Two rates that share one unit: "↓15 ↑100 kB/s". Fits under a gauge.
+function fmtPair(a, b) {
+  var big = Math.max(Number(a) || 0, Number(b) || 0)
+  if (big >= 1024 * 1024) return "↓" + (a / (1024 * 1024)).toFixed(1) + " ↑" + (b / (1024 * 1024)).toFixed(1) + " MB/s"
+  return "↓" + Math.round((Number(a) || 0) / 1024) + " ↑" + Math.round((Number(b) || 0) / 1024) + " kB/s"
+}
+
 function fmtLoad(load) {
   if (!load || load.length < 1) return ""
   return (Number(load[0]) || 0).toFixed(1)
@@ -634,7 +641,7 @@ function railCaption(snapshot, which, rows, history) {
   if (which === "cpu") return Math.round(Math.min(1, loadFraction(snapshot)) * 100) + "%"
   if (which === "gpu") return Math.round(Number(snapshot.gpu) || 0) + "%"
   if (which === "disk") return fmtRate(diskActivity(snapshot, rows))
-  if (which === "net" && snapshot.net) return "↓ " + fmtRate(snapshot.net.down) + "  ↑ " + fmtRate(snapshot.net.up)
+  if (which === "net" && snapshot.net) return fmtPair(snapshot.net.down, snapshot.net.up)
   return ""
 }
 
