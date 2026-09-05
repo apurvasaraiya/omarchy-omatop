@@ -51,7 +51,15 @@ Panel {
 
   // What a gauge says underneath: the machine's figure, or, with a row
   // under the cursor, that app's figure in the same unit.
+  // Pointing at the grey block, which is no row, names it instead.
+  property bool restHovered: false
+
   function gaugeCaption(which) {
+    if (root.restHovered) {
+      if (which === "net") return "no app split"
+      var fig = Model.restFigure(root.snapshot, root.rows, which, root.visibleRows)
+      return fig !== "" ? "everything else " + fig : ""
+    }
     if (root.hoverRow && root.hoverRow.type !== "note" && root.hoverRow.type !== "header") return Model.rowFigure(root.hoverRow, which)
     return Model.railCaption(root.snapshot, which, root.rows, which === "mem" ? root.history : undefined)
   }
@@ -534,7 +542,6 @@ Panel {
     function keyAt(y) {
       for (var i = 0; i < gaugeItem.shown.length; i++) {
         var s = gaugeItem.shown[i]
-        if (s.key === "rest") continue
         var top = 1 + gaugeItem.innerHeight * (1 - s.start - s.frac)
         if (y >= top && y <= top + gaugeItem.innerHeight * s.frac) return s.key
       }
@@ -553,6 +560,7 @@ Panel {
     Connections {
       target: root
       function onCursorKeyChanged() { canvas.requestPaint() }
+      function onRestHoveredChanged() { canvas.requestPaint() }
     }
 
     Canvas {
@@ -598,9 +606,9 @@ Panel {
           if (sh < 0.5) continue
           var hot = hovering && s.key === root.cursorKey
           var col, alpha
-          if (s.key === "rest") { col = fg; alpha = 0.16 }
+          if (s.key === "rest") { col = fg; alpha = root.restHovered ? 0.38 : 0.16 }
           else { col = Model.colorFor(s.key); alpha = 0.92 }
-          if (hovering && !hot) alpha *= 0.22
+          if ((hovering && !hot) || (root.restHovered && s.key !== "rest")) alpha *= 0.22
           ctx.fillStyle = Qt.alpha(col, alpha)
           ctx.fillRect(1, top, w - 2, Math.max(0.5, sh - 1))
         }
@@ -619,12 +627,15 @@ Panel {
         onPositionChanged: function(mouse) {
           if (!pointerGate.moved(gaugeItem, mouse)) return
           var key = gaugeItem.keyAt(mouse.y)
+          if (key === "rest") { root.releasePointerCursor(); root.restHovered = true; return }
+          root.restHovered = false
           if (key !== "") root.pointerCursorKey(key)
           else root.releasePointerCursor()
         }
+        onExited: root.restHovered = false
         onClicked: function(mouse) {
           var key = gaugeItem.keyAt(mouse.y)
-          if (key !== "") root.activate(root.rowMap[key] || null)
+          if (key !== "" && key !== "rest") root.activate(root.rowMap[key] || null)
         }
       }
     }

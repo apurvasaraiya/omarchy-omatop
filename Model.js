@@ -470,6 +470,34 @@ function stackSegments(segments) {
   return out
 }
 
+// The grey block's figure: what the machine reports minus the rows on
+// screen. Rows below the fold, shared memory, the kernel, other users.
+function restFigure(snapshot, rows, which, visibleCount) {
+  if (!snapshot || !snapshot.mem) return ""
+  var seen = 0
+  var count = 0
+  for (var i = 0; i < rows.length && count < visibleCount; i++) {
+    var r = rows[i]
+    if (r.type === "note" || r.type === "header") continue
+    count++
+    seen += Number(r[which]) || 0
+  }
+  var focused = rows.length > 0 && rows[0].type === "header"
+  var used
+  if (focused) used = Number(rows[0][which]) || 0
+  else if (which === "mem") used = snapshot.mem.used
+  else if (which === "cpu") used = (Number(snapshot.load[0]) || 0) * 100
+  else if (which === "gpu") used = Number(snapshot.gpu) || 0
+  else if (which === "disk") used = diskActivity(snapshot, rows)
+  else return ""
+  var rest = Math.max(0, used - seen)
+  if (which === "mem") return fmtMem(rest)
+  if (which === "cpu") return fmtCpu(rest)
+  if (which === "gpu") return fmtGpu(rest)
+  if (which === "disk") return fmtDisk(rest)
+  return ""
+}
+
 function segmentMap(segments) {
   var m = {}
   for (var i = 0; i < segments.length; i++) m[segments[i].key] = segments[i]
