@@ -17,9 +17,12 @@ library only); the QML only paints and confirms.
 - Never drive the panel with synthetic keystrokes (`wtype`) unless a
   screenshot taken in the same second shows the panel open and focused;
   otherwise the keys land in whatever the user is typing into.
-- Site attribution needs a Chromium started with `--remote-debugging-port=0`.
+- Site attribution needs a Chromium started with a fixed nonzero
+  `--remote-debugging-port`, normally `9222`. Port zero makes Chromium expose
+  webdriver mode to pages. The collector also accepts the old port-zero
+  `DevToolsActivePort` setup while it is still running.
   To test without touching the user's browser:
-  `setsid -f chromium --headless=new --remote-debugging-port=0 --user-data-dir=/tmp/x --no-first-run https://example.com`
+  `setsid -f chromium --headless=new --remote-debugging-port=9222 --user-data-dir=/tmp/x --no-first-run https://example.com`
   (`setsid` so it groups as its own app rather than under your terminal).
   Kill it when done.
 - This Omarchy's Hyprland takes the Lua dispatcher form:

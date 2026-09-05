@@ -70,7 +70,7 @@ Panel {
     cpu: Model.columnMax(rows, "cpu"), mem: Model.columnMax(rows, "mem"), gpu: Model.columnMax(rows, "gpu"),
     disk: Model.columnMax(rows, "disk"), net: Model.columnMax(rows, "net")
   })
-  readonly property var emptyRow: ({ type: "note", key: "", parentKey: "", name: "", comm: "", subtitle: "", mem: 0, cpu: 0, gpu: 0, net: 0, disk: 0, age: 0, count: 0, pids: [], root: 0, protectedRow: true, drillable: false, closable: false, browser: false, devtools: "", profile: "", targets: [], omarchy: false, icon: "", iconName: "", depth: 0 })
+  readonly property var emptyRow: ({ type: "note", key: "", parentKey: "", name: "", comm: "", subtitle: "", mem: 0, cpu: 0, gpu: 0, net: 0, disk: 0, age: 0, count: 0, pids: [], root: 0, protectedRow: true, drillable: false, closable: false, browser: false, devtools: "", devtoolsPort: 0, profile: "", targets: [], omarchy: false, icon: "", iconName: "", depth: 0 })
 
   function limitRows(all) {
     var out = []
@@ -319,6 +319,7 @@ Panel {
     if (row.type === "site") {
       if (row.targets.length === 0) return
       cmd = ["python3", root.scriptPath, "activate-site", "--profile", row.profile, "--target", row.targets[0]]
+      if (row.devtoolsPort > 0) cmd.push("--port", String(row.devtoolsPort))
     } else {
       cmd = ["python3", root.scriptPath, "focus-app", "--pids", row.pids.join(",")]
       fallback = true
@@ -352,6 +353,7 @@ Panel {
     root.lastError = ""
     if (row.type === "site") {
       actProc.command = ["python3", root.scriptPath, "close-site", "--profile", row.profile, "--targets", row.targets.join(",")]
+      if (row.devtoolsPort > 0) actProc.command.push("--port", String(row.devtoolsPort))
     } else {
       var p = {}
       for (var k in root.pendingQuits) p[k] = root.pendingQuits[k]

@@ -80,16 +80,16 @@ For that to work Chromium has to expose DevTools locally, with one flag
 in `~/.config/chromium-flags.conf`:
 
 ```
---remote-debugging-port=0
+--remote-debugging-port=9222
 ```
 
-Port zero means Chromium picks a random port and writes it to
-`~/.config/chromium/DevToolsActivePort`, which the collector reads. It is
-bound to 127.0.0.1. Any process running as you can already read your
-profile directory, so this does not widen what a local process could do;
-it is still a debugging endpoint, so remove the line if that trade is not
-for you. Without it the panel still works, at app level, and the browser
-row says that sites appear after a restart.
+Omatop uses a fixed nonzero port so Chromium does not mark normal pages as
+webdriver-controlled. It asks `http://127.0.0.1:9222/json/version` for the
+browser WebSocket endpoint and keeps reading `DevToolsActivePort` when an
+older port-zero setup is still running. The endpoint remains local to the
+machine. It is still a debugging endpoint, so remove the line if you do not
+want that trade. Without it the panel still works at app level, and the
+browser row says that sites appear after a restart.
 
 Memory is PSS from `smaps_rollup` for the heaviest 32 processes and RSS for
 the rest, so Chromium's shared pages are counted once. CPU is the classic
@@ -115,10 +115,11 @@ omarchy plugin add https://github.com/apurvasaraiya/omarchy-omatop.git --enable
 
 That puts the tank in the bar. For the page view inside Chromium, open the
 panel, press Enter on the Chromium row, and press Enter again on the note
-that says "turn on the page view": it appends `--remote-debugging-port=0`
-to `~/.config/chromium-flags.conf`. Restart Chromium once. Without it the
-panel still works at app level. (`python3 ~/.config/omarchy/plugins/apurva.omatop/omatop setup`
-does the same from a shell.)
+that says "turn on the page view": it adds or updates
+`--remote-debugging-port=9222` in `~/.config/chromium-flags.conf`. Restart
+Chromium once. Without it the panel still works at app level.
+(`python3 ~/.config/omarchy/plugins/apurva.omatop/omatop setup` does the
+same from a shell.)
 
 Requirements: Omarchy 4 (the shell with plugins), Python 3, and for the page
 view a Chromium-based browser using the default profile directory. Nothing
@@ -140,8 +141,8 @@ Settings, in the widget's entry in `~/.config/omarchy/shell.json`:
   did not around this one.
 
 To remove: `omarchy plugin remove apurva.omatop`, and delete the
-`--remote-debugging-port=0` line from `~/.config/chromium-flags.conf` if you
-added it. The plugin keeps no state outside `$XDG_RUNTIME_DIR`, which the
+`--remote-debugging-port=9222` line from `~/.config/chromium-flags.conf` if
+you added it. The plugin keeps no state outside `$XDG_RUNTIME_DIR`, which the
 system clears at logout.
 
 A keybind, in `~/.config/hypr/bindings.lua`:

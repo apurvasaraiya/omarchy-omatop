@@ -7,7 +7,7 @@ Subcommands
   activate-site --target ID        bring that tab or web-app window to front
   focus-app --pids PID,PID         focus the Hyprland window of any of these pids
   kill --pids PID,PID [--force]    SIGTERM (or SIGKILL) a process group
-  setup                            add --remote-debugging-port=0 to chromium-flags.conf
+  setup                            enable the local DevTools endpoint for site rows
 
 Standard library only. The Chromium DevTools client below speaks the
 websocket protocol by hand so the plugin has no dependencies to install.
@@ -460,15 +460,42 @@ def devtools_port_file(profile_dir):
     return os.path.join(profile_dir, "DevToolsActivePort")
 
 
-def read_devtools_endpoint(profile_dir):
+DEFAULT_DEVTOOLS_PORT = 9222
+
+
+def fixed_devtools_endpoint(port):
+    """Return the browser WebSocket URL for a fixed local DevTools port."""
+    if not isinstance(port, int) or not 1 <= port <= 65535:
+        return None
+    url = "http://127.0.0.1:%d/json/version" % port
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url, timeout=0.75) as response:
+            payload = json.loads(response.read(1 << 15).decode("utf-8", "replace"))
+        ws_url = payload.get("webSocketDebuggerUrl", "")
+        parsed = urllib.parse.urlsplit(ws_url)
+        if parsed.scheme != "ws" or parsed.hostname not in ("127.0.0.1", "localhost") or parsed.port != port:
+            return None
+        return ws_url
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def read_devtools_endpoint(profile_dir, port=None):
+    if isinstance(port, int) and port > 0:
+        endpoint = fixed_devtools_endpoint(port)
+        if endpoint:
+            return endpoint
+        if port != DEFAULT_DEVTOOLS_PORT:
+            return None
     txt = read(devtools_port_file(profile_dir), 512)
     lines = txt.strip().splitlines()
     if len(lines) < 2 or not lines[0].isdigit():
+        return fixed_devtools_endpoint(DEFAULT_DEVTOOLS_PORT) if port is None else None
+    active_port = int(lines[0])
+    if active_port <= 0:
         return None
-    port = int(lines[0])
-    if port <= 0:
-        return None
-    return "ws://127.0.0.1:%d%s" % (port, lines[1].strip())
+    return "ws://127.0.0.1:%d%s" % (active_port, lines[1].strip())
 
 
 def host_of(url):
@@ -499,8 +526,8 @@ class SiteResolver:
         self.status = "off"
         self.error = ""
 
-    def sites(self, live_pids):
-        endpoint = read_devtools_endpoint(self.profile_dir)
+    def sites(self, live_pids, port=None):
+        endpoint = read_devtools_endpoint(self.profile_dir, port)
         if not endpoint:
             self.status = "off"
             return {}
@@ -741,6 +768,25 @@ def devtools_flag_present():
     return "--remote-debugging-port" in read(CHROMIUM_FLAGS, 1 << 14)
 
 
+def configured_devtools_port():
+    for line in read(CHROMIUM_FLAGS, 1 << 14).splitlines():
+        m = re.match(r"\s*--remote-debugging-port=(\d+)\s*$", line)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def process_devtools_port(cmd):
+    for arg in cmd:
+        if not arg.startswith("--remote-debugging-port="):
+            continue
+        try:
+            return int(arg.split("=", 1)[1])
+        except ValueError:
+            return None
+    return None
+
+
 def browser_profile_dir(root_cmd):
     for arg in root_cmd:
         if arg.startswith("--user-data-dir="):
@@ -956,11 +1002,12 @@ class Sampler:
         cmds = {pid: cmdline(pid) for pid in app["pids"]}
         kinds = {pid: chromium_kind(cmds[pid]) for pid in app["pids"]}
         profile = browser_profile_dir(cmds.get(app["root"], []))
+        port = process_devtools_port(cmds.get(app["root"], []))
         resolver = self.resolvers.get(profile)
         if resolver is None:
             resolver = self.resolvers[profile] = SiteResolver(profile)
         renderers = {pid for pid, k in kinds.items() if k == "renderer"}
-        by_host = resolver.sites(renderers)
+        by_host = resolver.sites(renderers, port)
         favicons = self.favicons.get(profile)
         if favicons is None:
             favicons = self.favicons[profile] = FaviconStore(profile)
@@ -988,6 +1035,7 @@ class Sampler:
                 "title": site["titles"][0] if site["titles"] else "",
                 "tabs": len(site["targets"]),
                 "targets": site["targets"],
+                "devtoolsPort": port or 0,
                 "pids": pids,
                 "mem": sum(mem[p] for p in pids),
                 "cpu": round(sum(cpu_pct.get(p, 0.0) for p in pids), 1),
@@ -1021,6 +1069,7 @@ class Sampler:
         app["sites"] = rows
         app["devtools"] = resolver.status
         app["devtoolsFlag"] = devtools_flag_present()
+        app["devtoolsPort"] = port or 0
         if resolver.error:
             app["devtoolsError"] = resolver.error[:200]
         app["profile"] = profile
@@ -1069,6 +1118,7 @@ def cmd_watch(args):
 def cmd_close_site(args):
     targets = []
     profile = os.path.join(HOME, ".config", "chromium")
+    port = None
     i = 0
     while i < len(args):
         if args[i] == "--targets" and i + 1 < len(args):
@@ -1077,9 +1127,15 @@ def cmd_close_site(args):
         elif args[i] == "--profile" and i + 1 < len(args):
             profile = args[i + 1]
             i += 2
+        elif args[i] == "--port" and i + 1 < len(args):
+            try:
+                port = int(args[i + 1])
+            except ValueError:
+                port = None
+            i += 2
         else:
             i += 1
-    endpoint = read_devtools_endpoint(profile)
+    endpoint = read_devtools_endpoint(profile, port if port is not None else DEFAULT_DEVTOOLS_PORT)
     if not endpoint:
         print("devtools endpoint not available", file=sys.stderr)
         return 2
@@ -1119,6 +1175,7 @@ def hypr_focus(address):
 def cmd_activate_site(args):
     target = ""
     profile = os.path.join(HOME, ".config", "chromium")
+    port = None
     i = 0
     while i < len(args):
         if args[i] == "--target" and i + 1 < len(args):
@@ -1127,9 +1184,15 @@ def cmd_activate_site(args):
         elif args[i] == "--profile" and i + 1 < len(args):
             profile = args[i + 1]
             i += 2
+        elif args[i] == "--port" and i + 1 < len(args):
+            try:
+                port = int(args[i + 1])
+            except ValueError:
+                port = None
+            i += 2
         else:
             i += 1
-    endpoint = read_devtools_endpoint(profile)
+    endpoint = read_devtools_endpoint(profile, port if port is not None else DEFAULT_DEVTOOLS_PORT)
     if not endpoint or not target:
         return 2
     dt = DevTools(endpoint)
@@ -1182,21 +1245,28 @@ def cmd_focus_app(args):
 def cmd_setup(args):
     """Turn on Chromium's local DevTools endpoint for the site view.
 
-    Appends one line to chromium-flags.conf if it is not already there.
+    Uses a fixed nonzero port so normal pages do not report webdriver mode.
     Takes effect when Chromium next starts.
     """
-    if devtools_flag_present():
+    os.makedirs(os.path.dirname(CHROMIUM_FLAGS), exist_ok=True)
+    current = read(CHROMIUM_FLAGS, 1 << 14)
+    configured = configured_devtools_port()
+    if configured == DEFAULT_DEVTOOLS_PORT:
         print("already on: restart Chromium if sites are not showing")
         return 0
-    os.makedirs(os.path.dirname(CHROMIUM_FLAGS), exist_ok=True)
-    fd = os.open(CHROMIUM_FLAGS, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644)
+    lines = [line for line in current.splitlines()
+             if not re.match(r"\s*--remote-debugging-port=\d+\s*$", line)]
+    lines.append("--remote-debugging-port=%d" % DEFAULT_DEVTOOLS_PORT)
+    content = "\n".join(lines).rstrip("\n") + "\n"
+    tmp = "%s.%d.%s.tmp" % (CHROMIUM_FLAGS, os.getpid(), base64.b32encode(os.urandom(5)).decode().lower())
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644)
     try:
-        current = read(CHROMIUM_FLAGS, 1 << 14)
-        lead = "" if current == "" or current.endswith("\n") else "\n"
-        os.write(fd, (lead + "--remote-debugging-port=0\n").encode())
+        os.write(fd, content.encode())
     finally:
         os.close(fd)
-    print("added --remote-debugging-port=0 to %s; restart Chromium" % CHROMIUM_FLAGS)
+    os.replace(tmp, CHROMIUM_FLAGS)
+    action = "changed" if configured is not None else "added"
+    print("%s --remote-debugging-port=%d in %s; restart Chromium" % (action, DEFAULT_DEVTOOLS_PORT, CHROMIUM_FLAGS))
     return 0
 
 
