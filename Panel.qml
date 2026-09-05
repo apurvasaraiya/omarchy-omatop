@@ -55,13 +55,16 @@ Panel {
   property bool restHovered: false
 
   function gaugeCaption(which) {
-    if (root.restHovered) {
-      if (which === "net") return "no app split"
-      var fig = Model.restFigure(root.snapshot, root.rows, which, root.visibleRows)
-      return fig !== "" ? "everything else " + fig : ""
-    }
+    if (root.restHovered && which !== "net") return Model.restFigure(root.snapshot, root.rows, which, root.visibleRows)
     if (root.hoverRow && root.hoverRow.type !== "note" && root.hoverRow.type !== "header") return Model.rowFigure(root.hoverRow, which)
     return Model.railCaption(root.snapshot, which, root.rows, which === "mem" ? root.history : undefined)
+  }
+
+  // The label under a gauge names what the caption is about: the resource,
+  // or, pointing at the grey, the remainder.
+  function gaugeLabel(which, label) {
+    if (root.restHovered && which !== "net") return "OTHER"
+    return label
   }
   readonly property var colMax: ({
     cpu: Model.columnMax(rows, "cpu"), mem: Model.columnMax(rows, "mem"), gpu: Model.columnMax(rows, "gpu"),
@@ -606,9 +609,9 @@ Panel {
           if (sh < 0.5) continue
           var hot = hovering && s.key === root.cursorKey
           var col, alpha
-          if (s.key === "rest") { col = fg; alpha = root.restHovered ? 0.38 : 0.16 }
+          if (s.key === "rest") { col = fg; alpha = root.restHovered ? 0.26 : 0.16 }
           else { col = Model.colorFor(s.key); alpha = 0.92 }
-          if ((hovering && !hot) || (root.restHovered && s.key !== "rest")) alpha *= 0.22
+          if ((hovering && !hot) || (root.restHovered && s.key !== "rest")) alpha *= 0.35
           ctx.fillStyle = Qt.alpha(col, alpha)
           ctx.fillRect(1, top, w - 2, Math.max(0.5, sh - 1))
         }
@@ -793,10 +796,10 @@ Panel {
           width: parent.width
           readonly property int cell: Math.floor(width / 5)
 
-          Gauge { id: memGauge; width: gauges.cell; target: root.memSegments; label: "RAM"; caption: root.gaugeCaption("mem") }
-          Gauge { id: cpuGauge; width: gauges.cell; target: root.cpuSegments; label: "CPU"; caption: root.gaugeCaption("cpu") }
-          Gauge { id: gpuGauge; width: gauges.cell; target: root.gpuSegments; label: "GPU"; caption: root.gaugeCaption("gpu") }
-          Gauge { id: diskGauge; width: gauges.cell; target: root.diskSegments; label: "DISK"; caption: root.gaugeCaption("disk") }
+          Gauge { id: memGauge; width: gauges.cell; target: root.memSegments; label: root.gaugeLabel("mem", "RAM"); caption: root.gaugeCaption("mem") }
+          Gauge { id: cpuGauge; width: gauges.cell; target: root.cpuSegments; label: root.gaugeLabel("cpu", "CPU"); caption: root.gaugeCaption("cpu") }
+          Gauge { id: gpuGauge; width: gauges.cell; target: root.gpuSegments; label: root.gaugeLabel("gpu", "GPU"); caption: root.gaugeCaption("gpu") }
+          Gauge { id: diskGauge; width: gauges.cell; target: root.diskSegments; label: root.gaugeLabel("disk", "DISK"); caption: root.gaugeCaption("disk") }
 
           // The network gauge is the machine's, not split by app: the kernel
           // does not say which process a byte belonged to. Two columns in
