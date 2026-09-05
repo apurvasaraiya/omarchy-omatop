@@ -7,6 +7,7 @@ Subcommands
   activate-site --target ID        bring that tab or web-app window to front
   focus-app --pids PID,PID         focus the Hyprland window of any of these pids
   kill --pids PID,PID [--force]    SIGTERM (or SIGKILL) a process group
+  setup                            add --remote-debugging-port=0 to chromium-flags.conf
 
 Standard library only. The Chromium DevTools client below speaks the
 websocket protocol by hand so the plugin has no dependencies to install.
@@ -16,7 +17,6 @@ import base64
 import json
 import os
 import re
-import shutil
 import signal
 import socket
 import sqlite3
@@ -613,6 +613,42 @@ def omarchy_webapps():
 # ------------------------------------------------------------ favicons ----
 
 ICON_DIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "omatop-%d" % UID, "icons")
+FAVICON_DB_CAP = 128 * 1024 * 1024
+
+
+def ensure_private_dir(path):
+    """Create path 0700 and refuse it unless it is a directory we own that
+    is not a symlink and not group/world writable. Same-user code could
+    plant something at a predictable path; we never build on it."""
+    os.makedirs(path, 0o700, exist_ok=True)
+    st = os.lstat(path)
+    import stat as _stat
+    if not _stat.S_ISDIR(st.st_mode) or st.st_uid != UID or (st.st_mode & 0o022):
+        raise OSError("refusing %s: not a private directory of ours" % path)
+
+
+def copy_regular_file(src, dst, cap):
+    """Copy src to dst without following symlinks on either side; dst is
+    created exclusively; src must be a regular file under cap bytes."""
+    fd_in = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        st = os.fstat(fd_in)
+        import stat as _stat
+        if not _stat.S_ISREG(st.st_mode) or st.st_size > cap:
+            raise OSError("not a regular file under the size cap: %s" % src)
+        fd_out = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            remaining = cap
+            while remaining > 0:
+                chunk = os.read(fd_in, min(1 << 20, remaining))
+                if not chunk:
+                    break
+                os.write(fd_out, chunk)
+                remaining -= len(chunk)
+        finally:
+            os.close(fd_out)
+    finally:
+        os.close(fd_in)
 
 
 class FaviconStore:
@@ -645,9 +681,12 @@ class FaviconStore:
         if not os.path.isfile(src):
             return None
         if self.copy is None or time.monotonic() - self.copied_at > 300:
-            os.makedirs(ICON_DIR, 0o700, exist_ok=True)
-            dst = os.path.join(ICON_DIR, "favicons.%d.sqlite" % os.getpid())
-            shutil.copyfile(src, dst)
+            ensure_private_dir(os.path.dirname(ICON_DIR))
+            ensure_private_dir(ICON_DIR)
+            dst = os.path.join(ICON_DIR, "favicons.%d.%s.sqlite" % (os.getpid(), base64.b32encode(os.urandom(5)).decode().lower()))
+            copy_regular_file(src, dst, FAVICON_DB_CAP)
+            if self.copy:
+                _quiet_remove(self.copy)
             self.copy = dst
             self.copied_at = time.monotonic()
             self.cache = {}
@@ -693,6 +732,13 @@ def _quiet_remove(path):
         os.remove(path)
     except OSError:
         pass
+
+
+CHROMIUM_FLAGS = os.path.join(HOME, ".config", "chromium-flags.conf")
+
+
+def devtools_flag_present():
+    return "--remote-debugging-port" in read(CHROMIUM_FLAGS, 1 << 14)
 
 
 def browser_profile_dir(root_cmd):
@@ -974,6 +1020,7 @@ class Sampler:
 
         app["sites"] = rows
         app["devtools"] = resolver.status
+        app["devtoolsFlag"] = devtools_flag_present()
         if resolver.error:
             app["devtoolsError"] = resolver.error[:200]
         app["profile"] = profile
@@ -1132,6 +1179,27 @@ def cmd_focus_app(args):
     return 3
 
 
+def cmd_setup(args):
+    """Turn on Chromium's local DevTools endpoint for the site view.
+
+    Appends one line to chromium-flags.conf if it is not already there.
+    Takes effect when Chromium next starts.
+    """
+    if devtools_flag_present():
+        print("already on: restart Chromium if sites are not showing")
+        return 0
+    os.makedirs(os.path.dirname(CHROMIUM_FLAGS), exist_ok=True)
+    fd = os.open(CHROMIUM_FLAGS, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644)
+    try:
+        current = read(CHROMIUM_FLAGS, 1 << 14)
+        lead = "" if current == "" or current.endswith("\n") else "\n"
+        os.write(fd, (lead + "--remote-debugging-port=0\n").encode())
+    finally:
+        os.close(fd)
+    print("added --remote-debugging-port=0 to %s; restart Chromium" % CHROMIUM_FLAGS)
+    return 0
+
+
 def cmd_kill(args):
     pids = []
     force = False
@@ -1176,6 +1244,8 @@ def main(argv):
         return cmd_activate_site(rest)
     if cmd == "focus-app":
         return cmd_focus_app(rest)
+    if cmd == "setup":
+        return cmd_setup(rest)
     if cmd == "kill":
         return cmd_kill(rest)
     print("unknown command: %s" % cmd, file=sys.stderr)

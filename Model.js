@@ -322,7 +322,8 @@ function appendBrowserRows(rows, app) {
       type: "note",
       key: app.key + "/note",
       parentKey: app.key,
-      name: devtoolsNote(app.devtools),
+      name: devtoolsNote(app.devtools, app.devtoolsFlag === true),
+      setup: app.devtools === "off" && app.devtoolsFlag !== true,
       comm: "",
       subtitle: "", mem: 0, cpu: 0, gpu: 0, net: 0, disk: 0, age: 0, count: 0, pids: [], root: 0, protectedRow: true,
       drillable: false, closable: false, browser: false,
@@ -376,9 +377,12 @@ function siteSubtitle(site) {
   return parts.join(" · ")
 }
 
-function devtoolsNote(status) {
-  if (status === "off") return "Sites appear once Chromium restarts with DevTools on"
-  if (status === "error") return "Could not read sites from Chromium"
+// The note under a browser whose pages cannot be read yet. It is a row you
+// can press Enter on: with the flag missing that turns it on; with the flag
+// present only a browser restart is left.
+function devtoolsNote(status, flagPresent) {
+  if (status === "off") return flagPresent ? "Restart Chromium to see its pages" : "Press Enter to turn on the page view (adds a Chromium flag)"
+  if (status === "error") return "Could not read pages from Chromium"
   return ""
 }
 

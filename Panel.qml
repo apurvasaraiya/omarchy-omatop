@@ -309,7 +309,9 @@ Panel {
   // front, a page brings its tab forward. The panel closes first: while it
   // holds the keyboard the compositor will not hand focus to anyone else.
   function activate(row) {
-    if (!row || row.type === "note" || row.type === "bucket") return
+    if (!row) return
+    if (row.type === "note") { if (row.setup) setupProc.running = true; return }
+    if (row.type === "bucket") return
     if (row.type === "header") { drillOut(); return }
     if (row.drillable) { drillInto(row.key); return }
     var cmd
@@ -464,6 +466,14 @@ Panel {
     onExited: function(code) {
       if (code !== 0 && root.lastError === "") root.lastError = "That did not work (exit " + code + ")"
     }
+  }
+
+  // Turns on Chromium's local DevTools endpoint from the note row; the
+  // next sample shows the note change to "restart Chromium".
+  Process {
+    id: setupProc
+    command: ["python3", root.scriptPath, "setup"]
+    onExited: function(code) { if (code !== 0) root.lastError = "Could not edit chromium-flags.conf" }
   }
 
   Timer {
@@ -1011,7 +1021,7 @@ Panel {
             MouseArea {
               anchors.fill: parent
               hoverEnabled: true
-              cursorShape: rowItem.isNote ? Qt.ArrowCursor : Qt.PointingHandCursor
+              cursorShape: rowItem.isNote && !rowItem.row.setup ? Qt.ArrowCursor : Qt.PointingHandCursor
               onPositionChanged: function(mouse) {
                 if (pointerGate.moved(rowItem, mouse) && root.cursor !== rowItem.index) root.pointerCursor(rowItem.index)
               }

@@ -5,6 +5,8 @@ shell that answers one question when you click it: which app, and inside
 Chromium which site, is holding the memory and burning the CPU right now,
 with a way to close it from the same row.
 
+![Omatop panel](preview.png)
+
 `htop` shows twenty-three rows called `chromium`. This shows one row called
 Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
 `Extensions 200 MB`, `Browser core 970 MB`.
@@ -29,7 +31,9 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
   dim to that one app, ribbons in its colour join its segment across the
   strip, and every caption turns into that app's own figure. The RAM
   caption also carries a trend word from the last half hour, "climbing",
-  "steady" or "falling". Every number in the list sits over a hairline
+  as an arrow: ↗ climbing, → steady, ↘ falling. Pointing at the grey block
+  in a gauge, the part no row on screen accounts for, relabels the gauges
+  OTHER with that remainder. Every number in the list sits over a hairline
   scaled to the column's largest value, so a column reads as a chart.
   Nothing is blank: a quiet 0 is a real zero, and DISK carries its unit.
   SOCKETS is the network column's honest name.
@@ -45,7 +49,7 @@ Chromium that opens into `cursor.com 1.7 GB`, `wikipedia.org 42 MB`,
   pages.
 - **The browser view** lists every page the browser holds, with its
   favicon straight out of Chromium's own cache, and one row for the browser
-  itself (extensions, GPU, network, background pages). The rails become the
+  itself (extensions, GPU, network, background pages). The gauges become the
   browser's, scaled to its own totals. Enter or a click on a page brings
   that tab, or web-app window, to the front. Esc, the left arrow, or the
   header row go back. A page row is one origin across all its tabs and
@@ -72,8 +76,8 @@ page's frames with their OS process ids. That takes about 50 ms per page,
 is cached per tab, and is redone only when a tab navigates or its renderer
 goes away.
 
-For that to work Chromium has to expose DevTools locally. `install.sh`
-appends this to `~/.config/chromium-flags.conf`:
+For that to work Chromium has to expose DevTools locally, with one flag
+in `~/.config/chromium-flags.conf`:
 
 ```
 --remote-debugging-port=0
@@ -105,28 +109,67 @@ and the hero shows the machine's own receive and send rate.
 
 ## Install
 
+```bash
+omarchy plugin add https://github.com/apurvasaraiya/omarchy-omatop.git --enable
 ```
-git clone <this repo> ~/dev/omarchy/omatop
+
+That puts the tank in the bar. For the page view inside Chromium, open the
+panel, press Enter on the Chromium row, and press Enter again on the note
+that says "turn on the page view": it appends `--remote-debugging-port=0`
+to `~/.config/chromium-flags.conf`. Restart Chromium once. Without it the
+panel still works at app level. (`python3 ~/.config/omarchy/plugins/apurva.omatop/omatop setup`
+does the same from a shell.)
+
+Requirements: Omarchy 4 (the shell with plugins), Python 3, and for the page
+view a Chromium-based browser using the default profile directory. Nothing
+to install.
+
+For development, link a checkout instead so edits land live:
+
+```bash
+git clone https://github.com/apurvasaraiya/omarchy-omatop.git ~/dev/omarchy/omatop
 ~/dev/omarchy/omatop/install.sh
 ```
 
-The script symlinks the plugin into `~/.config/omarchy/plugins/apurva.omatop`,
-adds the Chromium flag if it is missing, and enables the widget on the right
-side of the bar. Restart Chromium once for site rows.
-
 Settings, in the widget's entry in `~/.config/omarchy/shell.json`:
 
-- `maxApps` (default 10): how many apps the panel lists.
-- `card` is set to `false` on install, so the widget sits in the bar without
-  the per-widget card outline of the V7 bar clone.
+- `sort` (default `mem`): written for you when you click a column title.
+- `maxApps` (default 50): how many apps the list holds.
+- `visibleRows` (default 11): how many rows show before it scrolls.
+- `card: false` if your bar draws per-widget cards and you would rather it
+  did not around this one.
 
-## IPC
+To remove: `omarchy plugin remove apurva.omatop`, and delete the
+`--remote-debugging-port=0` line from `~/.config/chromium-flags.conf` if you
+added it. The plugin keeps no state outside `$XDG_RUNTIME_DIR`, which the
+system clears at logout.
 
-- `omarchy-shell apurva.omatop toggle` (also `open`, `close`)
-- `omarchy-shell apurva.omatop browser`: open straight into the browser's pages
-- `omarchy-shell apurva.omatop quit app:<pid>`: open on that row with the
-  quit confirmation up, which is also how the quit flow is tested
-- `omarchy-shell apurva.omatop state`: cursor, sort and query as JSON
+A keybind, in `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + SHIFT + T", "Omatop", "omarchy-shell apurva.omatop toggle")
+```
+
+## What this touches on the system
+
+- Reads `/proc` for your own processes, the machine's memory, load, network
+  and disk counters, your web-app launchers in
+  `~/.local/share/applications`, and, when the page view is on, Chromium's
+  DevTools endpoint over 127.0.0.1 plus a read-only copy of its favicon
+  database.
+- Writes favicon PNGs and that database copy to
+  `$XDG_RUNTIME_DIR/omatop-<uid>/icons/` (private directory, exclusive
+  temp files then rename). Writes one line to `chromium-flags.conf` only
+  when you ask for the page view. Writes your sort choice to `shell.json`
+  through the shell's own API.
+- Runs `hyprctl` to focus windows, `btop` and a notification when asked,
+  and `kill` on your own processes after you confirm.
+- No network beyond the loopback DevTools socket. No telemetry.
+
+The DevTools endpoint is a debugging interface bound to localhost. Any
+process running as you could already read your Chromium profile, so it does
+not widen what a local process could do, but it is a debugging endpoint;
+leave the page view off if that trade is not for you.
 
 ## Files
 
@@ -137,4 +180,6 @@ Settings, in the widget's entry in `~/.config/omarchy/shell.json`:
 - `Panel.qml` - the breakdown.
 - `Model.js` - formatting, the hero sentence, row flattening. No QML in it.
 
-Built against omarchy `4.0.0.r2014` (September 2026).
+Built and verified against omarchy `4.0.0.r2014` (September 2026).
+MIT licence. Issues and pull requests at
+https://github.com/apurvasaraiya/omarchy-omatop.
