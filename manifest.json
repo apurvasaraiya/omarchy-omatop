@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "apurva.omatop",
   "name": "Omatop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Apurva Saraiya",
   "description": "Who is eating the laptop: memory and CPU by app, and by site inside Chromium, with a confirmed close from the row",
   "kinds": [
