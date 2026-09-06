@@ -1,13 +1,15 @@
 # Marketplace submission draft
 
-Post as an issue on HANCORE-linux/omarchy-plugin-marketplace. The commit below is tag v1.0.0; re-review pins a new SHA after any fix.
+Post as an issue on omacom/omarchy-plugin-marketplace, using the "Submit a
+plugin" form. The commit below is tag v1.0.1; re-review pins a new SHA after
+any fix.
 
 ---
 
 **Plugin:** Omatop — who is eating the laptop
 **Id:** `apurva.omatop`
 **Repo:** https://github.com/apurvasaraiya/omarchy-omatop
-**Commit:** `d15137c986aa56c8219d4b71348ad6325e9a0047` (tag `v1.0.0`)
+**Commit:** `52319fc810f1469a30cbb15e7e215efaef727ef9` (tag `v1.0.1`)
 **Kinds:** bar-widget
 **Author:** Apurva Saraiya
 
